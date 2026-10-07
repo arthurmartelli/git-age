@@ -909,7 +909,7 @@ DEPENDENCIES
 
 git-age requires:
 
-* Python 3.10+
+* Python 3.9+
 * age
 * age-keygen
 * Git
@@ -6942,75 +6942,74 @@ def run_hook(config: Config) -> int:
     # A staged or committed .gitage may differ from the attributes.
     _refresh_diff_attributes(git, verbose=config.options.verbose)
 
-    match config.options.hook_event:
-        case "pre-commit":
-            # Removing a .gitage that HEAD has would silently unprotect its
-            # files, so it is refused even when no .gitage is left staged.
-            if _rule_removal_refused(git):
-                return 1
-            # Without a staged .gitage, e.g. on an old or orphan branch or
-            # with a global core.hooksPath, nothing is protected and the
-            # hook stays out of the way. A .gitage.key is still refused; the
-            # AGE-SECRET-KEY- scan is not, since without rules it would
-            # refuse any file that merely mentions the marker.
-            if not Repository.staged_rule_files(git):
-                key_files = [
-                    path for path in git.staged_changed_paths() if path.name == LOCAL_KEY_FILE_NAME
-                ]
-                return 1 if _private_keys_refused(key_files) else 0
-            # Judge the commit by its own staged .gitage files.
-            repository = Repository.from_index(git)
-            resolve_recipients(config, repository)
-            return run_pre_commit_hook(config, repository)
-        case "post-commit":
-            if not find_gitage_files(git.root, in_git=True):
-                return 0
-            repository = Repository.from_working_tree(git.root)
-            resolve_recipients(config, repository)
-            return run_post_commit_hook(config, repository)
-        case "pre-push":
-            return run_pre_push_hook(config, git, sys.stdin)
-        case event if event in SYNC_HOOK_EVENTS:
-            # These must never fail, since git checkout/merge/rebase report
-            # hook errors. Only post-merge knows the range that came in.
-            if event == "post-merge":
-                try:
-                    warn_merged_recipient_changes(git)
-                except Exception as exc:
-                    _err(f"git-age: could not check [{RECIPIENTS_SECTION}] changes: {exc}")
+    event = config.options.hook_event
+    if event == "pre-commit":
+        # Removing a .gitage that HEAD has would silently unprotect its
+        # files, so it is refused even when no .gitage is left staged.
+        if _rule_removal_refused(git):
+            return 1
+        # Without a staged .gitage, e.g. on an old or orphan branch or
+        # with a global core.hooksPath, nothing is protected and the
+        # hook stays out of the way. A .gitage.key is still refused; the
+        # AGE-SECRET-KEY- scan is not, since without rules it would
+        # refuse any file that merely mentions the marker.
+        if not Repository.staged_rule_files(git):
+            key_files = [
+                path for path in git.staged_changed_paths() if path.name == LOCAL_KEY_FILE_NAME
+            ]
+            return 1 if _private_keys_refused(key_files) else 0
+        # Judge the commit by its own staged .gitage files.
+        repository = Repository.from_index(git)
+        resolve_recipients(config, repository)
+        return run_pre_commit_hook(config, repository)
+    if event == "post-commit":
+        if not find_gitage_files(git.root, in_git=True):
             return 0
+        repository = Repository.from_working_tree(git.root)
+        resolve_recipients(config, repository)
+        return run_post_commit_hook(config, repository)
+    if event == "pre-push":
+        return run_pre_push_hook(config, git, sys.stdin)
+    if event in SYNC_HOOK_EVENTS:
+        # These must never fail, since git checkout/merge/rebase report
+        # hook errors. Only post-merge knows the range that came in.
+        if event == "post-merge":
+            try:
+                warn_merged_recipient_changes(git)
+            except Exception as exc:
+                _err(f"git-age: could not check [{RECIPIENTS_SECTION}] changes: {exc}")
+        return 0
 
     raise RuntimeError(f"unsupported hook event: {config.options.hook_event}")
 
 
 def run(config: Config) -> int:
-    match config.command:
-        case "keygen":
-            return run_keygen(config)
-        case "install":
-            return run_install(config)
-        case "uninstall":
-            return run_uninstall(config)
-        case "textconv":
-            return run_textconv(config)
-        case "clean":
-            return run_clean(config)
-        case "merge":
-            return run_merge(config)
-        case "trust":
-            return run_trust(config)
-        case "audit":
-            return run_audit(config)
-        case "hook":
-            return run_hook(config)
-        case "help":
-            return run_help(config)
-        case "completion":
-            return run_completion(config)
-        case "check" if config.options.cached:
-            return run_check_cached(config, Git.at(config.root))
-        case "check":
-            return run_check(config, Repository.from_working_tree(config.root))
+    if config.command == "keygen":
+        return run_keygen(config)
+    if config.command == "install":
+        return run_install(config)
+    if config.command == "uninstall":
+        return run_uninstall(config)
+    if config.command == "textconv":
+        return run_textconv(config)
+    if config.command == "clean":
+        return run_clean(config)
+    if config.command == "merge":
+        return run_merge(config)
+    if config.command == "trust":
+        return run_trust(config)
+    if config.command == "audit":
+        return run_audit(config)
+    if config.command == "hook":
+        return run_hook(config)
+    if config.command == "help":
+        return run_help(config)
+    if config.command == "completion":
+        return run_completion(config)
+    if config.command == "check" and config.options.cached:
+        return run_check_cached(config, Git.at(config.root))
+    if config.command == "check":
+        return run_check(config, Repository.from_working_tree(config.root))
 
     repository = Repository.from_working_tree(config.root)
     # status stays read-only.
@@ -7024,17 +7023,16 @@ def run(config: Config) -> int:
             config, repository, protected_files, config.options.paths
         )
 
-    match config.command:
-        case "edit":
-            return run_edit(config, repository, protected_files)
-        case "lock":
-            return run_lock(config, repository, protected_files)
-        case "rekey":
-            return run_rekey(config, protected_files)
-        case "unlock":
-            return run_unlock(config, protected_files)
-        case "status":
-            return run_status(config, repository, protected_files)
+    if config.command == "edit":
+        return run_edit(config, repository, protected_files)
+    if config.command == "lock":
+        return run_lock(config, repository, protected_files)
+    if config.command == "rekey":
+        return run_rekey(config, protected_files)
+    if config.command == "unlock":
+        return run_unlock(config, protected_files)
+    if config.command == "status":
+        return run_status(config, repository, protected_files)
 
     raise AssertionError(f"unhandled command: {config.command}")
 

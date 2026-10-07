@@ -10,7 +10,7 @@ with no dependencies beyond Python, Git and age.
 
 ## Install
 
-Requires Python 3.10+, Git, `age` and `age-keygen`.
+Requires Python 3.9+, Git, `age` and `age-keygen`.
 
 ```sh
 curl -fsSLo ~/.local/bin/git-age https://raw.githubusercontent.com/arthurmartelli/git-age/main/git-age

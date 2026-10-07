@@ -22,7 +22,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         # The oldest supported Python and the newest release.
-        python: ["3.10", "3.x"]
+        python: ["3.9", "3.x"]
         include:
           # Safe replacement has its own code paths on macOS and Windows.
           - os: macos-latest
