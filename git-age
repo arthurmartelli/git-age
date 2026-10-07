@@ -5397,6 +5397,11 @@ def _key_leak_advice() -> list[str]:
     ]
 
 
+# Written here rather than delegated to git filter-repo: its blob callback
+# cannot see paths, which protection and per-directory recipients depend on,
+# and its file info callback needs a recent release. Rewriting objects
+# directly also lets one pass list every version that cannot be decrypted
+# before any ref moves, with no dependency beyond Git and age.
 class HistoryRewrite:
     """
     Re-encrypt the protected files of every commit to the current
