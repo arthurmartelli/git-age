@@ -922,6 +922,7 @@ import contextlib
 import enum
 import errno
 import hashlib
+import io
 import os
 import pathlib
 import re
@@ -2136,6 +2137,19 @@ def _require_executable(name: str) -> str:
     return executable
 
 
+def _on_path(name: str) -> bool:
+    """Whether Git finds the program name on PATH."""
+
+    if shutil.which(name) is not None:
+        return True
+    # Git also runs scripts without a PATHEXT extension, which which() skips.
+    return _WINDOWS and any(
+        (pathlib.Path(directory) / name).is_file()
+        for directory in os.environ.get("PATH", "").split(os.pathsep)
+        if directory
+    )
+
+
 def _run_git(
     root: pathlib.Path,
     args: list[str],
@@ -2364,9 +2378,10 @@ _XATTR_UNSUPPORTED = {errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENODATA, errno.EINV
 # git-age lacks, and are kept when possible.
 _OWNER_XATTR_PREFIXES = ("user.", "system.posix_acl_")
 
-# copyfile(3) flags on macOS.
+# copyfile(3) flags and the acl_set_file(3) type of file ACLs on macOS.
 _COPYFILE_ACL = 1 << 0
 _COPYFILE_XATTR = 1 << 2
+_ACL_TYPE_EXTENDED = 0x100
 
 # ReplaceFileW flags, and the attributes SetFileAttributesW can set.
 _REPLACEFILE_IGNORE_MERGE_ERRORS = 0x2
@@ -2466,8 +2481,22 @@ def _copy_macos_metadata(source: pathlib.Path, target: pathlib.Path) -> None:
 
     import ctypes
 
+    libc = _macos_libc()
+    # copyfile keeps the entries target inherited from its directory, which
+    # source may not have, so start from an empty ACL.
+    acl = libc.acl_init(0)
+    if not acl:
+        raise RuntimeError(f"cannot clear the ACL of {target}: {os.strerror(ctypes.get_errno())}")
+    try:
+        if libc.acl_set_file(os.fsencode(target), _ACL_TYPE_EXTENDED, acl) != 0:
+            error = ctypes.get_errno()
+            if error != errno.ENOTSUP:
+                raise RuntimeError(f"cannot clear the ACL of {target}: {os.strerror(error)}")
+    finally:
+        libc.acl_free(acl)
+
     flags = _COPYFILE_ACL | _COPYFILE_XATTR
-    if _macos_copyfile()(os.fsencode(source), os.fsencode(target), None, flags) == 0:
+    if libc.copyfile(os.fsencode(source), os.fsencode(target), None, flags) == 0:
         return
     error = ctypes.get_errno()
     # Some com.apple.* attributes are reserved to the system.
@@ -2479,15 +2508,20 @@ def _copy_macos_metadata(source: pathlib.Path, target: pathlib.Path) -> None:
 
 
 @cache
-def _macos_copyfile() -> Any:
+def _macos_libc() -> Any:
     import ctypes
     import ctypes.util
 
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-    function = libc.copyfile
-    function.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
-    function.restype = ctypes.c_int
-    return function
+    libc.copyfile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_uint32]
+    libc.copyfile.restype = ctypes.c_int
+    libc.acl_init.argtypes = [ctypes.c_int]
+    libc.acl_init.restype = ctypes.c_void_p
+    libc.acl_set_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
+    libc.acl_set_file.restype = ctypes.c_int
+    libc.acl_free.argtypes = [ctypes.c_void_p]
+    libc.acl_free.restype = ctypes.c_int
+    return libc
 
 
 @cache
@@ -2555,7 +2589,8 @@ def _make_replaceable(path: pathlib.Path) -> int | None:
 
 
 def _fsync_path(path: pathlib.Path) -> None:
-    with path.open("rb") as file:
+    # Windows flushes only files opened for writing.
+    with path.open("r+b" if _WINDOWS else "rb") as file:
         os.fsync(file.fileno())
 
 
@@ -3796,11 +3831,14 @@ def _shell_paths(paths: list[pathlib.PurePosixPath]) -> str:
     return " ".join(shlex.quote(path.as_posix()) for path in paths)
 
 
-def _display_path(config: Config, path: pathlib.Path) -> pathlib.Path:
+def _display_path(config: Config, path: pathlib.Path) -> pathlib.PurePosixPath:
+    """path relative to -C if inside it, with forward slashes as Git shows paths."""
+
     try:
-        return path.relative_to(config.root)
+        path = path.relative_to(config.root)
     except ValueError:
-        return path
+        pass
+    return pathlib.PurePosixPath(path.as_posix())
 
 
 def print_status(config: Config, protected_files: list[ProtectedFile]) -> None:
@@ -3854,7 +3892,7 @@ def print_porcelain_status(
     terminator = "\0" if null_terminated else "\n"
 
     for protected_file in protected_files:
-        path = _display_path(config, protected_file.path).as_posix()
+        path = str(_display_path(config, protected_file.path))
         if not null_terminated:
             path = _quote_porcelain_path(path)
         if protected_file.path in stale_paths:
@@ -4618,7 +4656,7 @@ def select_protected_files(
     for path in paths:
         target = resolve_path(config.root, path)
         if not target.is_relative_to(repository.root):
-            raise RuntimeError(f"{path}: outside {repository.root}")
+            raise RuntimeError(f"{path.as_posix()}: outside {repository.root}")
         targets.append(target)
 
     selected = [
@@ -5993,7 +6031,7 @@ def run_install(config: Config) -> int:
     mode = _effective_hook_mode(git.root)
     unlock_after_commit = _effective_unlock_after_commit(git.root)
 
-    if shutil.which("git-age") is None:
+    if not _on_path("git-age"):
         _err(
             "git-age: warning: `git-age` is not on PATH; the hooks run "
             "`git age` and will fail until it is."
@@ -7020,6 +7058,11 @@ def run(config: Config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if _WINDOWS:
+        # Print LF line endings, as Git does, rather than CRLF.
+        for stream in (sys.stdout, sys.stderr):
+            if isinstance(stream, io.TextIOWrapper):
+                stream.reconfigure(newline="\n")
     try:
         config = parse_args(argv)
         return run(config)

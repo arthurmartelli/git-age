@@ -56,6 +56,19 @@ mv .gitage.key ~/.config/git-age/myrepo.key
 git config age.keyFile ~/.config/git-age/myrepo.key
 ```
 
+## Teams
+
+git-age supports sharing secrets with a team. Each member keeps their own
+private key outside the repository, and their public recipient is committed to
+`[recipients]` in `.gitage`. Nested `.gitage` files can grant a member access
+to only part of the repository.
+
+Adding and removing members, and limiting access, are covered in the manual:
+
+```sh
+git-age help teamwork
+```
+
 ## Documentation
 
 The full manual is built in:

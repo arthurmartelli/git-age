@@ -149,13 +149,13 @@ status_is() {
   [[ $("$GIT_AGE" "${args[@]}" status --porcelain 2>/dev/null) == "$(printf '%s\n' "$@")" ]]
 }
 
-# on_terminal COMMAND: run the shell COMMAND on a pseudo-terminal.
-if [[ $platform == macos ]]; then
-  on_terminal() { script -q /dev/null sh -c "$1"; }
-else
-  on_terminal() { script -qec "$1" /dev/null; }
-fi
-has_terminal() { [[ $platform != windows ]] && command -v script >/dev/null; }
+# on_terminal COMMAND: run the shell COMMAND on a pseudo-terminal, typing
+# what is on stdin. Unlike script(1), this works alike on Linux and macOS.
+on_terminal() {
+  python3 -c 'import os, pty, sys
+sys.exit(os.waitstatus_to_exitcode(pty.spawn(["sh", "-c", sys.argv[1]])))' "$1"
+}
+has_terminal() { [[ $platform != windows ]]; }
 
 # without_terminal COMMAND...: run COMMAND without a controlling terminal,
 # which native Windows programs never have.
@@ -640,7 +640,7 @@ if has_terminal; then
   check "c, then commit, commits plaintext" answer 'c\ncommit\n' "plaintext"
   check "HEAD stores it as plaintext" bash -c '[[ $(git show HEAD:top.env) == plain ]]'
 else
-  echo "  skip  interactive prompts (no script(1) here)"
+  echo "  skip  interactive prompts (no terminal on Windows)"
 fi
 
 section "per-directory recipients"
@@ -1219,11 +1219,14 @@ check "edit opens the editor and re-encrypts the change" \
   env EDITOR="$tmp/append-editor" "$GIT_AGE" edit a.env
 check "the file is still locked" is_locked a.env
 check "and decrypts to the edited content" decrypts_as alice a.env $'a\nNEW=1'
-# Windows has no mode bits, and gives the editor a Windows path.
+# git-age resolves macOS's /var symbolic link and Windows short names such
+# as RUNNER~1, and gives the editor a Windows path there. Windows has no
+# mode bits.
+repo7_real=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]).replace(os.sep, "/"))' "$repo7")
 if [[ $platform == windows ]]; then
-  edited_where="^[0-7]* $(cygpath -m "$repo7")"
+  edited_where="^[0-7]* $repo7_real"
 else
-  edited_where="^700 $repo7"
+  edited_where="^700 $repo7_real"
 fi
 check "the editor saw a private copy inside the Git directory" \
   grep -q "$edited_where/.git/git-age-edit-[^/]*/a.env\$" "$tmp/edited-where"
@@ -1308,7 +1311,7 @@ pages_help() {
 if has_terminal; then
   check "on a terminal, the manual goes through Git's pager" pages_help
 else
-  echo "  skip  the pager (no script(1) here)"
+  echo "  skip  the pager (no terminal on Windows)"
 fi
 check "without a terminal, it is printed plainly" \
   bash -c 'GIT_PAGER="sed s/^/paged:/" "$0" help | grep -qx "QUICK START"' "$GIT_AGE"
