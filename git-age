@@ -144,7 +144,7 @@ matches no protected file is an error.
 `lock`, `unlock` and `rekey` are transactional: either every selected
 file is changed or none of them are.
 
-File ownership, permissions, ACLs and extended attributes are preserved.
+File permissions, ACLs and extended attributes are preserved.
 
 
 .GITAGE
@@ -178,12 +178,17 @@ Supported syntax includes:
     *           match within one directory
     **          match across directories
     ?           match one character
-    [...]       character classes
+    [...]       character classes, such as [a-z] or [[:digit:]]
     !pattern    exclude a previous match
     /pattern    anchor at this `.gitage`
     directory/  match a directory
 
-The last matching pattern wins.
+The last matching pattern wins. As in Git, a file inside a protected
+directory stays protected, so `!pattern` cannot exclude it: protect
+`secrets/**` rather than `secrets/` to exclude files in `secrets/`.
+
+Patterns ignore case when Git's `core.ignoreCase` is set. A pattern Git
+would never match, such as one with an unterminated `[`, is an error.
 
 Escape a pattern that looks like a section name:
 
@@ -934,13 +939,14 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, replace
-from functools import cache, partial
+from functools import cache, cached_property, partial
 from typing import Any, Callable, Iterable, Iterator, NamedTuple, TextIO
 
 
 RULE_FILE_NAME = ".gitage"
 LOCAL_KEY_FILE_NAME = ".gitage.key"
-# Never protected, even by a broad rule such as '*'.
+# Encrypting these would lock git-age out of its own rules and key, so even a
+# broad rule such as '*' never protects them.
 CONTROL_FILE_NAMES = {RULE_FILE_NAME, LOCAL_KEY_FILE_NAME}
 
 KEY_FILE_ENV = "GIT_AGE_KEY_FILE"
@@ -954,7 +960,6 @@ ALLOW_REMOVE_ENV = "GIT_AGE_ALLOW_REMOVE"
 ALLOW_PLAINTEXT_PUSH_ENV = "GIT_AGE_ALLOW_PLAINTEXT_PUSH"
 TRUSTED_RECIPIENTS_ENV = "GIT_AGE_TRUSTED_RECIPIENTS"
 
-# Marker of a plaintext age private key, as written by age-keygen.
 AGE_SECRET_KEY_MARKER = "AGE-SECRET-KEY-"
 
 KEY_FILE_CONFIG = "age.keyFile"
@@ -963,20 +968,15 @@ HOOK_MODE_CONFIG = "age.hookMode"
 UNLOCK_AFTER_COMMIT_CONFIG = "age.unlockAfterCommit"
 TRUSTED_RECIPIENTS_CONFIG = "age.trustedRecipients"
 
-# How many commits that touch .gitage files recipient trust looks back.
 TRUST_HISTORY_LIMIT = 200
 
 AGE_HEADER = b"age-encryption.org/v1\n"
 AGE_ARMORED_HEADER = b"-----BEGIN AGE ENCRYPTED FILE-----\n"
 
-# Hooks that only keep the diff attributes in sync with .gitage.
 SYNC_HOOK_EVENTS = ("post-checkout", "post-merge", "post-rewrite")
-# Every hook `install` may install, and `uninstall` removes.
 MANAGED_HOOK_EVENTS = ("pre-commit", "post-commit", "pre-push", *SYNC_HOOK_EVENTS)
-# Hooks that get Git's arguments, rather than none.
 ARGUMENT_HOOK_EVENTS = {"pre-push"}
 
-# An all-zero oid: the side of a pushed ref that does not exist.
 NULL_OID_PATTERN = re.compile(r"0+")
 
 DIFF_DRIVER = "age"
@@ -988,8 +988,8 @@ FILTER_REQUIRED_CONFIG = f"filter.{FILTER_DRIVER}.required"
 MERGE_DRIVER = "age"
 MERGE_DRIVER_CONFIG = f"merge.{MERGE_DRIVER}.driver"
 MERGE_NAME_CONFIG = f"merge.{MERGE_DRIVER}.name"
-# The repo git config `install` sets, and `uninstall` unsets. Key and
-# recipient settings are the user's own, so both leave them alone.
+# Key and recipient settings are the user's own, so `install` and `uninstall`
+# leave them alone.
 INSTALL_CONFIG_KEYS = (
     HOOK_MODE_CONFIG,
     UNLOCK_AFTER_COMMIT_CONFIG,
@@ -1004,15 +1004,13 @@ USER_CONFIG_KEYS = (KEY_FILE_CONFIG, RECIPIENT_CONFIG, TRUSTED_RECIPIENTS_CONFIG
 ATTRIBUTES_BEGIN = "# BEGIN git-age (generated from .gitage; do not edit)"
 ATTRIBUTES_END = "# END git-age"
 
-# Index modes of regular files; symlinks and submodules are never touched.
 REGULAR_FILE_MODES = {"100644", "100755"}
 
-# Git's own binary heuristic: a NUL byte in the first 8000 bytes.
+# Matches Git's own binary heuristic.
 BINARY_SNIFF_BYTES = 8000
 
-# Entrypoints for Git and the hooks, not for people: completion hides them.
+# Git and the hooks call these, not people, so completion hides them.
 INTERNAL_COMMANDS = {"textconv", "clean", "merge", "hook"}
-# Commands that need neither a repository nor keys.
 DOCUMENTATION_COMMANDS = {"help", "completion"}
 
 
@@ -1037,7 +1035,6 @@ class IndexEntry(NamedTuple):
 
     @property
     def is_regular(self) -> bool:
-        # Symlinks (120000) and submodules (160000) are never transformed.
         return self.mode in REGULAR_FILE_MODES
 
 
@@ -1057,8 +1054,6 @@ class Baseline(NamedTuple):
     """
 
     rev: str
-    # The commit that introduced the current list, or None while the change
-    # is not committed yet; rev is then HEAD.
     changed_in: str | None
 
     @property
@@ -1073,16 +1068,17 @@ class Rule:
     pattern: str
     negate: bool = False
     line_number: int = 0
-    # Derived from pattern: the glob without the leading "/" (anchored) and
-    # the trailing "/" (directory_only) that gitignore gives a meaning to.
     glob: str = field(init=False)
     anchored: bool = field(init=False)
     directory_only: bool = field(init=False)
-    regex: re.Pattern[str] = field(init=False, repr=False)
+    regex: re.Pattern[bytes] = field(init=False, repr=False)
+    folded_regex: re.Pattern[bytes] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         glob = self.pattern
-        self.directory_only = glob.endswith("/") and not glob.endswith("\\/")
+        # Like Git, even after a backslash: the pattern then ends with one,
+        # which _glob_to_regex rejects.
+        self.directory_only = glob.endswith("/")
         if self.directory_only:
             glob = glob[:-1]
         self.anchored = glob.startswith("/")
@@ -1090,28 +1086,32 @@ class Rule:
             glob = glob[1:]
         self.glob = glob
         self.regex = _glob_to_regex(glob)
+        self.folded_regex = _glob_to_regex(glob, ignore_case=True)
 
-    def matches(self, relative_path: pathlib.PurePosixPath) -> bool:
-        """Whether the rule matches a path relative to its .gitage's directory."""
+    def matches(
+        self, relative_path: pathlib.PurePosixPath, *, is_directory: bool, ignore_case: bool
+    ) -> bool:
+        """
+        Whether the rule matches a path relative to its .gitage's directory.
+        Only the path itself: Repository.protection applies the rule to the
+        directories above it.
+        """
 
-        parts = relative_path.parts
-        if not self.glob or not parts:
+        if not self.glob or not relative_path.parts or (self.directory_only and not is_directory):
             return False
 
         if not self.anchored and "/" not in self.glob:
-            # Matches any path component, e.g. a directory the file is in.
-            candidates = parts[:-1] if self.directory_only else parts
-            return any(self.regex.fullmatch(component) for component in candidates)
-
-        stop = len(parts) - 1 if self.directory_only else len(parts)
-        return any(self.regex.fullmatch("/".join(parts[:length])) for length in range(1, stop + 1))
+            subject = relative_path.name
+        else:
+            subject = relative_path.as_posix()
+        regex = self.folded_regex if ignore_case else self.regex
+        return regex.fullmatch(os.fsencode(subject)) is not None
 
 
 @dataclass
 class RuleSet:
     path: pathlib.Path
     rules: list[Rule] = field(default_factory=list)
-    # None when the file has no [recipients] section.
     recipients: list[str] | None = None
 
     @property
@@ -1130,7 +1130,6 @@ class Protection:
 @dataclass(frozen=True)
 class ProtectedFile:
     path: pathlib.Path
-    # The working tree it is in; None outside Git.
     git: Git | None
     state: FileState
     protection: Protection
@@ -1162,12 +1161,8 @@ class StagedFile:
 class Config:
     command: str
     root: pathlib.Path
-    # parse_args() resolves the identities, and resolve_recipients() the
-    # recipients once the repository is known.
     age: Age
-    # The parsed command line, for the options of a single command.
     options: argparse.Namespace
-    # Set by resolve_recipients(): the recipients per directory.
     scopes: RecipientScopes | None = None
 
     def age_for(self, path: pathlib.Path) -> Age:
@@ -1218,7 +1213,7 @@ def _git_config_get_all(
         return []
 
     values: list[str] = []
-    # -z terminates each value with NUL; drop the empty piece after the last.
+    # -z ends every value with NUL, which leaves an empty last piece.
     for raw in result.stdout.split(b"\0")[:-1]:
         value = os.fsdecode(raw)
         if value.strip():
@@ -1306,7 +1301,6 @@ def resolve_recipients(config: Config, repository: Repository) -> None:
     age = config.age
     env_recipient = os.environ.get(RECIPIENT_ENV)
     config_recipients = _git_config_get_all(config.root, RECIPIENT_CONFIG)
-    # Whether the recipients are tracked by .gitage, including "none".
     tracked = False
 
     if config.options.recipients:
@@ -1591,9 +1585,6 @@ def build_parser() -> argparse.ArgumentParser:
     merge_parser.add_argument("ours", type=pathlib.Path)
     merge_parser.add_argument("theirs", type=pathlib.Path)
 
-    # Internal-ish command used by the generated hook. It is intentionally a
-    # real subcommand so generated shell remains tiny and all policy lives in
-    # this Python program.
     hook_parser = subparsers.add_parser("hook", help="internal Git hook entrypoint")
     hook_subparsers = hook_parser.add_subparsers(dest="hook_event", required=True)
     for event in MANAGED_HOOK_EVENTS:
@@ -1602,7 +1593,7 @@ def build_parser() -> argparse.ArgumentParser:
             event_parser.add_argument("push_remote", metavar="REMOTE")
             event_parser.add_argument("push_url", metavar="URL")
 
-    # Options that several commands share, for the commands without them.
+    # So that code shared between commands can read these on commands without them.
     parser.set_defaults(recipients=[], identities=[], no_reuse=False, paths=[])
     return parser
 
@@ -1613,8 +1604,7 @@ def parse_args(argv: list[str] | None = None) -> Config:
     root = args.root.expanduser().resolve()
     command = args.command
 
-    # Generated hooks never embed private key paths; like every other
-    # command they resolve the user's identity at execution time.
+    # Resolved at run time, so that generated hooks never embed private key paths.
     identities = (
         []
         if command == "keygen" or command in DOCUMENTATION_COMMANDS
@@ -1642,13 +1632,12 @@ class Repository:
     git: Git | None
     # Outermost first, so nested .gitage files override their ancestors.
     rule_sets: list[RuleSet]
-    # The top-level .gitage, whose [recipients] apply to every file, even
-    # when git-age runs on a subdirectory with -C.
+    # Kept even with -C subdir, since its [recipients] apply to every file.
     top_rule_file: pathlib.Path
-    # From its [recipients] section; None when it has none.
     recipients: list[str] | None = None
-    # Read from Git's index rather than the working tree.
     staged: bool = False
+    # Git's core.ignoreCase, which makes gitignore patterns case-insensitive.
+    ignore_case: bool = False
     _baselines: dict[tuple[pathlib.Path, bool], Baseline | None] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -1665,7 +1654,8 @@ class Repository:
             (rule_set.recipients for rule_set in rule_sets if rule_set.path == top_file), None
         )
         rule_sets = sorted(rule_sets, key=lambda item: (len(item.root.parts), item.path.as_posix()))
-        return cls(root, git, rule_sets, top_file, recipients, staged)
+        ignore_case = git is not None and git.ignore_case
+        return cls(root, git, rule_sets, top_file, recipients, staged, ignore_case)
 
     @classmethod
     def from_working_tree(cls, root: pathlib.Path) -> Repository:
@@ -1683,7 +1673,6 @@ class Repository:
         if not rule_paths:
             raise RuntimeError(f"no {RULE_FILE_NAME} files found under {git.root if git else root}")
 
-        # Symlinked .gitage files are ignored, here as in the index.
         return cls.build(root, git, [parse_gitage_file(path) for path in rule_paths])
 
     @classmethod
@@ -1778,14 +1767,32 @@ class Repository:
             return None
 
         absolute = self.root.joinpath(*relative_path.parts)
+        rule_sets = [
+            rule_set for rule_set in self.rule_sets if absolute.is_relative_to(rule_set.root)
+        ]
+        if not rule_sets:
+            return None
+
+        # Like Git, judge each directory on the way down: once one is
+        # protected, so is everything below it, whatever the negations.
+        top = rule_sets[0].root
+        levels = absolute.relative_to(top).parts
         protection: Protection | None = None
-        for rule_set in self.rule_sets:
-            if not absolute.is_relative_to(rule_set.root):
-                continue
-            relative = pathlib.PurePosixPath(absolute.relative_to(rule_set.root).as_posix())
-            for rule in rule_set.rules:
-                if rule.matches(relative):
-                    protection = None if rule.negate else Protection(rule, rule_set.path)
+        for depth in range(1, len(levels) + 1):
+            path = top.joinpath(*levels[:depth])
+            is_directory = depth < len(levels)
+            protection = None
+            for rule_set in rule_sets:
+                if not path.is_relative_to(rule_set.root):
+                    continue
+                relative = pathlib.PurePosixPath(path.relative_to(rule_set.root).as_posix())
+                for rule in rule_set.rules:
+                    if rule.matches(
+                        relative, is_directory=is_directory, ignore_case=self.ignore_case
+                    ):
+                        protection = None if rule.negate else Protection(rule, rule_set.path)
+            if protection is not None:
+                break
         return protection
 
     def recipient_chain(
@@ -1965,7 +1972,10 @@ def parse_gitage_text(path: pathlib.Path, contents: str) -> RuleSet:
                 if not line:
                     raise RuntimeError(f"{path}:{line_number}: empty negation rule")
 
-            rules.append(Rule(pattern=line, negate=negate, line_number=line_number))
+            try:
+                rules.append(Rule(pattern=line, negate=negate, line_number=line_number))
+            except ValueError as exc:
+                raise RuntimeError(f"{path}:{line_number}: {exc}") from exc
 
         elif section == RECIPIENTS_SECTION:
             assert recipients is not None
@@ -1989,73 +1999,158 @@ def parse_gitage_text(path: pathlib.Path, contents: str) -> RuleSet:
 # ---------------------------------------------------------------------------
 
 
-def _glob_to_regex(pattern: str) -> re.Pattern[str]:
-    output: list[str] = []
+def _ascii_bytes(predicate: Callable[[str], bool]) -> frozenset[int]:
+    return frozenset(byte for byte in range(128) if predicate(chr(byte)))
+
+
+# Git's wildmatch classifies bytes, and only ASCII ones belong to a class.
+_CHARACTER_CLASSES = {
+    "alnum": _ascii_bytes(str.isalnum),
+    "alpha": _ascii_bytes(str.isalpha),
+    "blank": frozenset(b" \t"),
+    "cntrl": frozenset([*range(32), 127]),
+    "digit": _ascii_bytes(str.isdigit),
+    "graph": frozenset(range(33, 127)),
+    "lower": _ascii_bytes(str.islower),
+    "print": frozenset(range(32, 127)),
+    "punct": _ascii_bytes(lambda char: char.isprintable() and not char.isalnum() and char != " "),
+    "space": frozenset(b" \t\n\r"),
+    "upper": _ascii_bytes(str.isupper),
+    "xdigit": _ascii_bytes(lambda char: char in "0123456789abcdefABCDEF"),
+}
+
+
+def _glob_to_regex(pattern: str, *, ignore_case: bool = False) -> re.Pattern[bytes]:
+    """
+    Translate a gitignore glob into a regex over a path's bytes, the way
+    Git's wildmatch reads it. Git never matches a malformed glob; raise
+    ValueError instead, since that would leave files unprotected.
+    """
+
+    glob = os.fsencode(pattern)
+    output: list[bytes] = []
     index = 0
 
-    while index < len(pattern):
-        char = pattern[index]
+    while index < len(glob):
+        char = glob[index : index + 1]
 
-        if char == "\\":
+        if char == b"\\":
             index += 1
-            if index >= len(pattern):
-                output.append(re.escape("\\"))
-                break
-            output.append(re.escape(pattern[index]))
-            index += 1
-            continue
-
-        if char == "*":
-            if index + 1 < len(pattern) and pattern[index + 1] == "*":
-                while index + 1 < len(pattern) and pattern[index + 1] == "*":
-                    index += 1
-
-                if index + 1 < len(pattern) and pattern[index + 1] == "/":
-                    output.append("(?:.*/)?")
-                    index += 2
-                else:
-                    output.append(".*")
-                    index += 1
-                continue
-
-            output.append("[^/]*")
+            if index >= len(glob):
+                raise ValueError("pattern ends with an unescaped backslash")
+            output.append(re.escape(glob[index : index + 1]))
             index += 1
             continue
 
-        if char == "?":
-            output.append("[^/]")
-            index += 1
-            continue
-
-        if char == "[":
-            close = index + 1
-            if close < len(pattern) and pattern[close] in "!^":
-                close += 1
-            if close < len(pattern) and pattern[close] == "]":
-                close += 1
-            while close < len(pattern) and pattern[close] != "]":
-                close += 1
-
-            if close >= len(pattern):
-                output.append(re.escape("["))
+        if char == b"*":
+            start = index
+            while glob[index : index + 1] == b"*":
                 index += 1
-                continue
+            # ** is special only as a whole path component; otherwise it is *.
+            if index - start > 1 and glob[start - 1 : start] in (b"", b"/"):
+                if index == len(glob):
+                    output.append(b".*")
+                    continue
+                if glob[index : index + 1] == b"/":
+                    output.append(b"(?:.*/)?")
+                    index += 1
+                    continue
+            output.append(b"[^/]*")
+            continue
 
-            stuff = pattern[index + 1 : close]
-            if stuff.startswith("!"):
-                stuff = "^" + stuff[1:]
-            elif stuff.startswith("^"):
-                stuff = "\\" + stuff
+        if char == b"?":
+            output.append(b"[^/]")
+            index += 1
+            continue
 
-            stuff = stuff.replace("\\", "\\\\")
-            output.append(f"[{stuff}]")
-            index = close + 1
+        if char == b"[":
+            members, index = _bracket_members(glob, index + 1, ignore_case=ignore_case)
+            output.append(
+                b"[" + b"".join(b"\\x%02x" % byte for byte in sorted(members)) + b"]"
+                if members
+                else b"(?!)"
+            )
             continue
 
         output.append(re.escape(char))
         index += 1
 
-    return re.compile("".join(output))
+    return re.compile(b"".join(output), re.DOTALL | (re.IGNORECASE if ignore_case else 0))
+
+
+def _bracket_members(glob: bytes, index: int, *, ignore_case: bool) -> tuple[set[int], int]:
+    """
+    The bytes that the [...] expression whose contents start at index
+    matches, and the index after its ']'. Like Git, a ']' first is a member,
+    and no expression matches '/'.
+    """
+
+    def unterminated() -> ValueError:
+        return ValueError("pattern has an unterminated [")
+
+    negated = glob[index : index + 1] in (b"!", b"^")
+    if negated:
+        index += 1
+
+    members: set[int] = set()
+    # The last single byte, which a following '-' makes the start of a range.
+    previous: int | None = None
+    first = True
+    while True:
+        if index >= len(glob):
+            raise unterminated()
+        byte = glob[index]
+        if byte == ord("]") and not first:
+            break
+        first = False
+
+        if byte == ord("\\"):
+            index += 1
+            if index >= len(glob):
+                raise unterminated()
+            previous = glob[index]
+            members.add(previous)
+        elif (
+            byte == ord("-")
+            and previous is not None
+            and glob[index + 1 : index + 2] not in (b"", b"]")
+        ):
+            index += 1
+            end = glob[index]
+            if end == ord("\\"):
+                index += 1
+                if index >= len(glob):
+                    raise unterminated()
+                end = glob[index]
+            members.update(range(previous, end + 1))
+            previous = None
+        elif byte == ord("[") and glob[index + 1 : index + 2] == b":":
+            close = glob.find(b"]", index + 2)
+            if close == -1:
+                raise unterminated()
+            if close == index + 2 or glob[close - 1] != ord(":"):
+                # Not [:name:], so the '[' is a member like any other byte.
+                previous = byte
+                members.add(byte)
+            else:
+                name = os.fsdecode(glob[index + 2 : close - 1])
+                if name not in _CHARACTER_CLASSES:
+                    raise ValueError(f"unknown character class [:{name}:]")
+                members |= _CHARACTER_CLASSES[name]
+                previous = None
+                index = close
+        else:
+            previous = byte
+            members.add(byte)
+        index += 1
+
+    if ignore_case:
+        # Before negating: [!a] matches neither a nor A.
+        members |= {ord(chr(byte).swapcase()) for byte in members if chr(byte).isascii()}
+    if negated:
+        members = set(range(256)) - members
+    members.discard(ord("/"))
+    return members, index + 1
 
 
 # ---------------------------------------------------------------------------
@@ -2069,8 +2164,7 @@ def _list_regular_files(root: pathlib.Path, *, in_git: bool) -> list[pathlib.Pat
 
     Inside a Git work tree this is Git's own view: tracked files plus
     untracked files that are not ignored, so ignored directories such as
-    `node_modules` and nested repositories are never visited. Outside Git it
-    falls back to walking the directory tree.
+    `node_modules` and nested repositories are never visited.
     """
 
     candidates = _git_candidate_files(root) if in_git else _walk_candidate_files(root)
@@ -2079,9 +2173,8 @@ def _list_regular_files(root: pathlib.Path, *, in_git: bool) -> list[pathlib.Pat
 
 
 def _git_candidate_files(root: pathlib.Path) -> list[pathlib.Path]:
-    # Paths are printed relative to root and limited to it. Tracked files may
-    # be missing from the working tree, and untracked nested repositories are
-    # listed as `dir/`; the caller's is_file() check drops both.
+    # Tracked files may be missing from the working tree, and untracked nested
+    # repositories are listed as `dir/`; the caller's is_file() check drops both.
     result = _run_git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
     return [
         root / os.fsdecode(entry)
@@ -2226,12 +2319,16 @@ class Git:
     def config_get(self, key: str, *, value_type: str | None = None) -> str | None:
         return _git_config_get(self.root, key, value_type=value_type)
 
+    @cached_property
+    def ignore_case(self) -> bool:
+        return self.config_get("core.ignorecase", value_type="bool") == "true"
+
     def config_set(self, key: str, value: str | None) -> None:
         """Set key in repo git config, or unset it when value is None."""
 
         allowed: tuple[int, ...]
         if value is None:
-            # Exit status 5: unsetting a key that is not set.
+            # Exit status 5 means the key was not set: nothing to undo.
             args, allowed = ["config", "--local", "--unset", key], (0, 5)
         else:
             args, allowed = ["config", "--local", key, value], (0,)
@@ -2299,9 +2396,7 @@ class Git:
         """
         Point each index entry at a blob of new content, keeping its mode.
 
-        Every blob is written first, then the index is updated in one
-        `git update-index` process. This avoids `git add`, which could stage
-        unrelated changes.
+        This avoids `git add`, which could stage unrelated changes.
         """
 
         payload = b"".join(
@@ -2370,20 +2465,18 @@ class Git:
 
 _WINDOWS = os.name == "nt"
 
-# Extended attribute errors that mean there is nothing to copy: the file
-# system has no extended attributes, or one vanished meanwhile.
+# Nothing to copy: the file system has no extended attributes, or one vanished
+# meanwhile.
 _XATTR_UNSUPPORTED = {errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENODATA, errno.EINVAL}
 # The owner of a file may always set these, so failing to is an error.
 # Others, such as security.selinux, may need privileges or a policy that
 # git-age lacks, and are kept when possible.
 _OWNER_XATTR_PREFIXES = ("user.", "system.posix_acl_")
 
-# copyfile(3) flags and the acl_set_file(3) type of file ACLs on macOS.
 _COPYFILE_ACL = 1 << 0
 _COPYFILE_XATTR = 1 << 2
 _ACL_TYPE_EXTENDED = 0x100
 
-# ReplaceFileW flags, and the attributes SetFileAttributesW can set.
 _REPLACEFILE_IGNORE_MERGE_ERRORS = 0x2
 _REPLACEFILE_IGNORE_ACL_ERRORS = 0x4
 _SETTABLE_FILE_ATTRIBUTES = (
@@ -2403,8 +2496,7 @@ _BLOCKING_FILE_ATTRIBUTES = (
 
 def _preserve_metadata(source: pathlib.Path, target: pathlib.Path) -> None:
     """
-    Give target the ownership, permissions, ACLs and extended attributes of
-    source.
+    Give target the permissions, ACLs and extended attributes of source.
 
     On Windows, _replace_file and Transaction carry them over instead.
     """
@@ -2412,26 +2504,13 @@ def _preserve_metadata(source: pathlib.Path, target: pathlib.Path) -> None:
     if _WINDOWS:
         return
 
-    source_stat = source.stat()
-    target_stat = target.stat()
-
-    if (target_stat.st_uid, target_stat.st_gid) != (source_stat.st_uid, source_stat.st_gid):
-        try:
-            os.chown(target, source_stat.st_uid, source_stat.st_gid)
-        except PermissionError as exc:
-            raise RuntimeError(
-                f"cannot preserve ownership of {source}: "
-                f"wanted uid={source_stat.st_uid}, gid={source_stat.st_gid}"
-            ) from exc
-
     if hasattr(os, "listxattr"):
         _copy_xattrs(source, target)
     elif sys.platform == "darwin":
         _copy_macos_metadata(source, target)
 
-    # chown can clear special permission bits on Linux, so chmod follows it.
     # An ACL's mask is the group bits, so this also leaves it as in source.
-    os.chmod(target, stat.S_IMODE(source_stat.st_mode))
+    os.chmod(target, stat.S_IMODE(source.stat().st_mode))
 
 
 def _copy_xattrs(source: pathlib.Path, target: pathlib.Path) -> None:
@@ -2664,7 +2743,6 @@ class _StagedReplacement:
     signature: tuple[int, ...]
     keep: bool = False
     backed_up: bool = False
-    # Windows file attributes to restore, see _make_replaceable().
     attributes: int | None = None
 
     @property
@@ -2780,15 +2858,13 @@ class Age:
 
     identities: list[pathlib.Path] = field(default_factory=list)
     recipients: list[str] = field(default_factory=list)
-    # Where the recipients come from, for messages; None when there are none.
     source: str | None = None
-    # Encrypt to the identities as well as the recipients: set when nested
-    # [recipients] add to an empty list, whose target is the identities.
+    # An empty list targets the identities, so nested [recipients] that add to
+    # it must keep encrypting to them.
     to_identities: bool = False
-    # Set when the recipients are tracked by .gitage and changed at some point.
     baseline: Baseline | None = None
     reuse: bool = True
-    # Shared with the copies scoped() makes.
+    # Shared with the copies scoped() makes, so each check and warning happens once.
     _plain: set[pathlib.Path] = field(default_factory=set, init=False, repr=False)
     _warned: set[frozenset[str]] = field(default_factory=set, init=False, repr=False)
 
@@ -2839,7 +2915,6 @@ class Age:
             )
         self.check_identities()
 
-        # No recipients configured: encrypt to every identity's own recipient.
         return command + self._identity_arguments()
 
     def own_recipients(self) -> frozenset[str] | None:
@@ -2977,9 +3052,7 @@ class Age:
         Encrypt plaintext, reusing Git's existing ciphertext when it is unchanged.
 
         age encryption is randomized, so encrypting the same plaintext twice
-        yields different bytes and Git would see a spurious modification. If a
-        ciphertext already stored in the index or HEAD decrypts to exactly this
-        plaintext, return it verbatim instead.
+        yields different bytes and Git would see a spurious modification.
 
         See reusable_ciphertext() for when ciphertext is reused.
         """
@@ -3047,8 +3120,6 @@ def _passphrase_protection(content: bytes) -> str | None:
         except (binascii.Error, ValueError):
             return None
 
-        # openssh-key-v1 layout: magic, then the cipher name as a
-        # length-prefixed string. "none" means unencrypted.
         magic = b"openssh-key-v1\0"
         if not blob.startswith(magic) or len(blob) < len(magic) + 4:
             return None
@@ -3116,8 +3187,7 @@ class RecipientScopes:
 
     repository: Repository
     base: Age
-    # Whether the base recipients come from .gitage, so that changes to
-    # them show in its history.
+    # Only recipients from .gitage have a history that shows when they changed.
     tracked: bool
     _ages: dict[pathlib.Path, Age] = field(default_factory=dict, init=False, repr=False)
     _trust_checked: bool = field(default=False, init=False, repr=False)
@@ -3165,7 +3235,6 @@ class RecipientScopes:
         return own.isdisjoint(listed)
 
 
-# Every [recipients] list, by the path of its .gitage relative to the top.
 RecipientLists = dict[pathlib.PurePosixPath, frozenset[str]]
 
 
@@ -3296,8 +3365,7 @@ def _trusted_changes(git: Git, lists: RecipientLists, pinned: str) -> list[str]:
 def check_recipient_trust(config: Config) -> None:
     """
     Before encrypting to .gitage's [recipients]: refuse when they differ
-    from the pinned hash; without a pin, warn when someone else changed
-    them last. Checks once per run.
+    from the pinned hash. Checks once per run.
     """
 
     scopes = config.scopes
@@ -3310,57 +3378,22 @@ def check_recipient_trust(config: Config) -> None:
 
     lists = scopes.repository.recipient_lists()
     pinned = _pinned_trust(git.root)
-    if pinned is not None:
-        value, source = pinned
-        if trust_hash(lists) == value:
-            return
-        _err(
-            f"git-age: the [{RECIPIENTS_SECTION}] lists differ from the ones you trusted "
-            f"({source}):",
-            "",
-            *_trusted_changes(git, lists, value),
-            "",
-            "Review the changes, then trust the current lists:",
-            "",
-            "  git-age trust",
-            "",
-        )
-        raise RuntimeError(f"refusing to encrypt to untrusted [{RECIPIENTS_SECTION}]")
-
-    change = _last_recipient_change(git)
-    me = (_git_config_get(git.root, "user.email") or "").lower()
-    if change is None or change.email.lower() == me:
+    if pinned is None:
+        return
+    value, source = pinned
+    if trust_hash(lists) == value:
         return
     _err(
-        f"git-age: warning: [{RECIPIENTS_SECTION}] were last changed by someone else:",
-        f"  {change}",
-        "Make sure you trust that change; `git-age trust` pins the current lists, so",
-        "that git-age refuses to encrypt to lists you have not seen.",
+        f"git-age: the [{RECIPIENTS_SECTION}] lists differ from the ones you trusted ({source}):",
+        "",
+        *_trusted_changes(git, lists, value),
+        "",
+        "Review the changes, then trust the current lists:",
+        "",
+        "  git-age trust",
+        "",
     )
-
-
-def _last_recipient_change(git: Git) -> GitageCommit | None:
-    """
-    The newest commit that changed a [recipients] list. A merge counts only
-    when its lists differ from every parent's; otherwise the change is the
-    merged branch's, and its own commit counts.
-    """
-
-    hashes: dict[str, str] = {}
-
-    def hash_at(rev: str) -> str:
-        if rev not in hashes:
-            lists = recipient_lists_at(git, rev) if git.has_commit(rev) else {}
-            hashes[rev] = trust_hash(lists)
-        return hashes[rev]
-
-    for commit in _gitage_commits(git, ["HEAD"]):
-        parents = git.run(["rev-parse", f"{commit.commit}^@"]).stdout.decode("ascii").split()
-        # A root commit compares with no lists at all.
-        parents = parents or [f"{commit.commit}^"]
-        if all(hash_at(commit.commit) != hash_at(parent) for parent in parents):
-            return commit
-    return None
+    raise RuntimeError(f"refusing to encrypt to untrusted [{RECIPIENTS_SECTION}]")
 
 
 def warn_merged_recipient_changes(git: Git) -> None:
@@ -3452,7 +3485,6 @@ def recipients_baseline(
     if relative is None:
         return None
 
-    # Every .gitage that may ever have had [recipients] for directory.
     rule_paths = [
         pathlib.PurePosixPath(*relative.parts[:depth], RULE_FILE_NAME)
         for depth in range(len(relative.parts) + 1)
@@ -3468,8 +3500,7 @@ def recipients_baseline(
     if _recipients_at(git, "HEAD", rule_paths) != current:
         return Baseline("HEAD", None)
 
-    # Recipients only change in commits touching these rule files. Walk them
-    # newest first until the parent's recipients differ.
+    # Recipients only change in commits touching these rule files.
     result = git.run(
         [
             "--literal-pathspecs",
@@ -3598,7 +3629,6 @@ def lock_content(config: Config, protected_file: ProtectedFile) -> bytes:
     if protected_file.state is not FileState.UNLOCKED:
         raise RuntimeError(f"cannot determine file state: {protected_file.path}")
 
-    # Fail before reading anything if there is no encryption configuration.
     age = config.age_for(protected_file.path)
     age.prepare()
 
@@ -3773,7 +3803,6 @@ def encrypt_staged_files(
     assert git is not None
     ages = [config.age_for(git.absolute(staged.path)) for staged in plaintext_files]
 
-    # Fail before touching Git if there is no encryption configuration.
     for age in ages:
         age.prepare()
 
@@ -3865,9 +3894,6 @@ def _no_access(config: Config, protected_file: ProtectedFile) -> bool:
 def _quote_porcelain_path(path: str) -> str:
     """
     Quote a path the way Git does with core.quotePath=false.
-
-    Paths with a double quote, backslash or control character are wrapped in
-    double quotes with C-style escapes; all other paths are left as they are.
     """
 
     escapes = {'"': '\\"', "\\": "\\\\", "\t": "\\t", "\n": "\\n"}
@@ -3930,8 +3956,7 @@ def _render_hook(event: str, comment: str) -> str:
     Render a tiny hook that delegates to `git age hook <event>`.
 
     Policy never lives in the hook itself, so upgrading git-age applies to
-    hooks that are already installed. Hooks in ARGUMENT_HOOK_EVENTS pass
-    Git's arguments on; `exec` passes stdin on to all of them.
+    hooks that are already installed.
     """
 
     command = " ".join(shlex.quote(part) for part in [*HOOK_PROGRAM_COMMAND, "hook", event])
@@ -4095,7 +4120,6 @@ def _prompt_hook_choice() -> HookChoice | None:
             tty_out.write("Choice [a]: ")
             tty_out.flush()
 
-            # An empty answer, or the end of input, aborts.
             answer = tty_in.readline().strip().lower()
             if answer in {"", "a", "abort"}:
                 return HookChoice.ABORT
@@ -4159,7 +4183,6 @@ def _attribute_patterns(prefix: str, rule: Rule) -> list[str]:
 
     base = f"{_escape_glob(prefix)}/" if prefix else ""
     if not rule.anchored and "/" not in pattern:
-        # Matches a path component at any depth below the .gitage.
         head = f"/{base}**/{pattern}"
         file_pattern = head if base else pattern
     else:
@@ -4432,7 +4455,8 @@ def _merge_plaintexts(
             ],
             check=False,
         )
-    # The number of conflicts, capped at 127; negative, i.e. 255, on error.
+    # git merge-file exits with the number of conflicts, capped at 127, and
+    # negative, i.e. 255, on error.
     if not 0 <= result.returncode <= 127:
         message = result.stderr.decode(errors="replace").strip()
         raise MergeError(f"git merge-file failed: {message}" if message else "git merge-file failed")
@@ -4518,7 +4542,6 @@ def run_merge(config: Config) -> int:
 
 def _configure_merge_driver(git: Git, enable: bool) -> None:
     command = " ".join(shlex.quote(part) for part in [*HOOK_PROGRAM_COMMAND, "merge"])
-    # %P is the path in the merge result, %L the conflict marker size.
     git.config_set(MERGE_NAME_CONFIG, "git-age: merge decrypted" if enable else None)
     git.config_set(
         MERGE_DRIVER_CONFIG, f"{command} --path %P --marker-size %L %O %A %B" if enable else None
@@ -4527,7 +4550,6 @@ def _configure_merge_driver(git: Git, enable: bool) -> None:
 
 def _configure_filter(git: Git, enable: bool) -> None:
     command = " ".join(shlex.quote(part) for part in [*HOOK_PROGRAM_COMMAND, "clean"])
-    # Git substitutes %f with the quoted path relative to the Git root.
     git.config_set(FILTER_CLEAN_CONFIG, f"{command} %f" if enable else None)
     # Required, so that Git refuses `git add` when a resolved conflict cannot
     # be encrypted, instead of storing the plaintext unchanged. A required
@@ -4818,7 +4840,6 @@ def run_lock(config: Config, repository: Repository, protected_files: list[Prote
 
 def run_rekey(config: Config, protected_files: list[ProtectedFile]) -> int:
     if not config.options.dry_run:
-        # Fail before touching any file if there is no encryption configuration.
         config.age.prepare()
         check_recipient_trust(config)
 
@@ -5119,19 +5140,17 @@ def run_check(config: Config, repository: Repository) -> int:
 # ---------------------------------------------------------------------------
 
 
-# The .gitage files of a commit, as sorted (path, blob oid) pairs.
 RuleState = tuple[tuple[pathlib.PurePosixPath, str], ...]
 
-# Where `audit --rekey` keeps the refs it rewrote, to undo it.
+# Backs up the refs `audit --rekey` rewrote, so that it can be undone.
 ORIGINAL_REFS = "refs/git-age/original"
 DELETE_ORIGINAL_REFS = (
     f"git for-each-ref --format='delete %(refname)' {ORIGINAL_REFS} | git update-ref --stdin"
 )
 
-# What `audit --rekey` rewrites; remote-tracking refs record the remote.
+# Remote-tracking refs are left out: they record what the remote has.
 REWRITTEN_REF_PREFIXES = ("refs/heads/", "refs/tags/", "refs/stash")
 
-# An embedded tag signature starts at one of these lines.
 TAG_SIGNATURE = re.compile(
     rb"^-----BEGIN (?:PGP SIGNATURE|PGP MESSAGE|SSH SIGNATURE|SIGNED MESSAGE)-----$", re.M
 )
@@ -5254,7 +5273,7 @@ class History:
         self.git = git
         self.revisions = revisions
         self.current = Repository.from_working_tree(git.root) if current_rules else None
-        # Parents before children.
+        # Parents first, since a commit's rules start from its parent's.
         result = git.run(
             ["rev-list", "--topo-order", "--reverse", "--parents", *revisions, "--"],
             error="cannot list the commits to audit",
@@ -5371,18 +5390,13 @@ class Leak(NamedTuple):
 
     path: pathlib.PurePosixPath
     oid: str
-    # The commits that introduced it there, oldest first.
     commits: list[str]
 
 
 class Leaks(NamedTuple):
     """What `git-age audit` finds."""
 
-    # Protected files committed as plaintext.
     plaintext: list[Leak]
-    # Private keys, like resolve_staged_private_keys() refuses: any
-    # .gitage.key, and any other blob containing AGE-SECRET-KEY- that is
-    # not age ciphertext. A protected file can be both.
     keys: list[Leak]
 
 
@@ -5393,7 +5407,6 @@ def find_leaks(history: History, reader: ObjectReader) -> Leaks:
     """
 
     leaks = Leaks([], [])
-    # By oid: its state, None when empty, and whether it holds a private key.
     blobs: dict[str, tuple[FileState | None, bool]] = {}
     marker = AGE_SECRET_KEY_MARKER.encode("ascii")
     for (path, oid), commits in sorted(history.introduced().items()):
@@ -5511,6 +5524,11 @@ def _key_leak_advice() -> list[str]:
     ]
 
 
+# Written here rather than delegated to git filter-repo: its blob callback
+# cannot see paths, which protection and per-directory recipients depend on,
+# and its file info callback needs a recent release. Rewriting objects
+# directly also lets one pass list every version that cannot be decrypted
+# before any ref moves, with no dependency beyond Git and age.
 class HistoryRewrite:
     """
     Re-encrypt the protected files of every commit to the current
@@ -5528,12 +5546,10 @@ class HistoryRewrite:
         self.plaintext_only: bool = options.plaintext_only
         self.dry_run = config.options.dry_run
         self.oid_length = len(history.commits[0]) // 2 if history.commits else 20
-        # (old blob oid, encryption command) -> new blob oid.
         self.blobs: dict[tuple[str, tuple[str, ...]], str] = {}
         self.trees: dict[tuple[pathlib.PurePosixPath, str, RuleState], str] = {}
         self.commits: dict[str, str] = {}
         self.tags: dict[str, str] = {}
-        # (path, oid) -> a commit that has it.
         self.undecryptable: dict[tuple[pathlib.PurePosixPath, str], str] = {}
         self.encrypted = 0
         self.reencrypted = 0
@@ -5666,8 +5682,7 @@ def _rewritable_refs(git: Git) -> list[tuple[str, str, str]]:
     result = git.run(["for-each-ref", "--format=%(refname)%00%(objectname)%00%(objecttype)"])
     candidates = [line.split("\0") for line in os.fsdecode(result.stdout).splitlines()]
     candidates = [entry for entry in candidates if entry[0].startswith(REWRITTEN_REF_PREFIXES)]
-    # Peel tags, also tags of tags, to what they finally point to; older
-    # Git peels only one level with %(*objecttype).
+    # Peeled here, since older Git peels only one level with %(*objecttype).
     tags = [oid for _, oid, kind in candidates if kind == "tag"]
     peeled: dict[str, str] = {}
     if tags:
@@ -5678,7 +5693,6 @@ def _rewritable_refs(git: Git) -> list[tuple[str, str, str]]:
         peeled = dict(zip(tags, result.stdout.decode("ascii").splitlines()))
     refs = []
     for ref, oid, kind in candidates:
-        # Tags that end at a tree or a blob stay as they are.
         if kind == "commit" or peeled.get(oid) == "commit":
             refs.append((ref, oid, kind))
     if git.run(["symbolic-ref", "-q", "HEAD"], check=False).returncode != 0:
@@ -5922,21 +5936,6 @@ def run_install(config: Config) -> int:
 
     `pre-commit` enforces the plaintext policy, and `pre-push` refuses to
     push what slipped past it.
-
-    `post-commit` is installed even when automatic unlock is disabled. The
-    disabled hook is a no-op, but having it present allows a one-off runtime
-    override such as:
-
-        GIT_AGE_UNLOCK_AFTER_COMMIT=1 git commit
-
-    without reinstalling hooks first.
-
-    With the diff driver, the merge driver or the clean filter,
-    `post-checkout`, `post-merge` and `post-rewrite` keep the generated
-    info/attributes block in sync with `.gitage`; without them, the first
-    and last are removed. `post-merge` stays, since it also warns about
-    merged [recipients] changes.
-
     """
 
     options = config.options
@@ -5946,7 +5945,6 @@ def run_install(config: Config) -> int:
     attributes = options.diff or options.filter or options.merge
     hooks = _managed_hooks(attributes)
 
-    # Validate ownership of EVERY destination before modifying any of them.
     for name, _ in hooks:
         _validate_managed_hook(hooks_dir / name, name)
 
@@ -6079,8 +6077,7 @@ def run_uninstall(config: Config) -> int:
     hooks_dir = git.hooks_directory()
     attributes_path = git.path("info/attributes")
 
-    # Each step is (what it does, what it did, action), so --dry-run
-    # reports exactly what would run.
+    # Each step describes itself, so --dry-run reports exactly what would run.
     steps: list[tuple[str, str, Callable[[], object]]] = []
     foreign_hooks: list[pathlib.Path] = []
 
@@ -6212,9 +6209,6 @@ def run_pre_commit_hook(config: Config, repository: Repository) -> int:
             _err("git-age: committing protected files as plaintext by explicit choice.")
             return 0
 
-    # ALWAYS_LOCK falls through directly; INTERACTIVE reaches here only after
-    # the user selected Encrypt.
-    #
     # Git refuses an empty commit before running this hook, unless --amend or
     # --allow-empty asked for one. So only an index that differed from HEAD
     # and is made identical by encryption is an accidental empty commit.
@@ -6260,10 +6254,6 @@ def run_post_commit_hook(config: Config, repository: Repository) -> int:
 
     This hook runs after Git has already created the commit, so failure here
     can only be reported; it cannot roll the commit back.
-
-    When enabled, all currently locked protected working-tree files are
-    unlocked. Files that remained plaintext because they had unstaged changes
-    are naturally skipped by the normal idempotent unlock logic.
     """
 
     try:
@@ -6376,7 +6366,6 @@ def run_pre_push_hook(config: Config, git: Git, updates: Iterable[str]) -> int:
 # help: the manual
 # ---------------------------------------------------------------------------
 
-# A section of the manual: a TITLE line underlined with dashes.
 MANUAL_HEADING = re.compile(r"^(\S.*)\n(-+)$", re.MULTILINE)
 
 
@@ -6508,14 +6497,12 @@ def _page(root: pathlib.Path, text: str) -> None:
 class CompletionOption(NamedTuple):
     names: list[str]
     help: str
-    # How to complete the value, see _completion_value(); None for a flag.
     value: str | list[str] | None
     repeatable: bool
     metavar: str
 
 
 class CompletionPositional(NamedTuple):
-    # argparse nargs: None (one), "?", "*" or "+".
     nargs: str | None
     value: str | list[str]
     metavar: str
@@ -6686,7 +6673,6 @@ __git_age_complete() {{
     opt=${{words[cword - 2]}} end=$((cword - 2))
   fi
 
-  # Find the command, and count its arguments before the cursor.
   for ((i = $1; i < end; i++)); do
     word=${{words[i]}}
     if [[ -z $dashdash && $word == -- ]]; then
@@ -6951,9 +6937,6 @@ def run_completion(config: Config) -> int:
 
 
 def run_hook(config: Config) -> int:
-    # Git hooks normally run from the worktree root, but resolving the root
-    # explicitly also makes manual invocation of the internal hook command
-    # predictable.
     git = Git.at(config.root)
 
     # A staged or committed .gitage may differ from the attributes.
@@ -6980,7 +6963,6 @@ def run_hook(config: Config) -> int:
             resolve_recipients(config, repository)
             return run_pre_commit_hook(config, repository)
         case "post-commit":
-            # Nothing to unlock without a .gitage.
             if not find_gitage_files(git.root, in_git=True):
                 return 0
             repository = Repository.from_working_tree(git.root)
