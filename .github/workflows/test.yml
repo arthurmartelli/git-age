@@ -32,6 +32,8 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      CGO_ENABLED: "0"
     steps:
       # Keep the scripts' LF line endings, which bash needs.
       - name: Disable CRLF conversion
@@ -43,6 +45,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -67,7 +73,9 @@ jobs:
           unzip -q age.zip
           echo "$RUNNER_TEMP\\age" >>"$GITHUB_PATH"
       - name: Test
-        run: ./git-age-test.sh
+        run: go test -count=1 -timeout=15m -v ./...
+      - name: Vet
+        run: go vet ./...
 
   # The one check the main branch ruleset requires, whatever the matrix.
   tests:
