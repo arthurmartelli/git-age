@@ -144,7 +144,7 @@ matches no protected file is an error.
 `lock`, `unlock` and `rekey` are transactional: either every selected
 file is changed or none of them are.
 
-File ownership, permissions, ACLs and extended attributes are preserved.
+File permissions, ACLs and extended attributes are preserved.
 
 
 .GITAGE
@@ -2369,8 +2369,7 @@ _BLOCKING_FILE_ATTRIBUTES = (
 
 def _preserve_metadata(source: pathlib.Path, target: pathlib.Path) -> None:
     """
-    Give target the ownership, permissions, ACLs and extended attributes of
-    source.
+    Give target the permissions, ACLs and extended attributes of source.
 
     On Windows, _replace_file and Transaction carry them over instead.
     """
@@ -2378,26 +2377,13 @@ def _preserve_metadata(source: pathlib.Path, target: pathlib.Path) -> None:
     if _WINDOWS:
         return
 
-    source_stat = source.stat()
-    target_stat = target.stat()
-
-    if (target_stat.st_uid, target_stat.st_gid) != (source_stat.st_uid, source_stat.st_gid):
-        try:
-            os.chown(target, source_stat.st_uid, source_stat.st_gid)
-        except PermissionError as exc:
-            raise RuntimeError(
-                f"cannot preserve ownership of {source}: "
-                f"wanted uid={source_stat.st_uid}, gid={source_stat.st_gid}"
-            ) from exc
-
     if hasattr(os, "listxattr"):
         _copy_xattrs(source, target)
     elif sys.platform == "darwin":
         _copy_macos_metadata(source, target)
 
-    # chown can clear special permission bits on Linux, so chmod follows it.
     # An ACL's mask is the group bits, so this also leaves it as in source.
-    os.chmod(target, stat.S_IMODE(source_stat.st_mode))
+    os.chmod(target, stat.S_IMODE(source.stat().st_mode))
 
 
 def _copy_xattrs(source: pathlib.Path, target: pathlib.Path) -> None:

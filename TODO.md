@@ -18,10 +18,3 @@
   `user.email` and protects against the same threat less reliably.
 
 - [ ] Improve gitignore pattern matching to follow Git semantics more exactly.
-
-## Small
-
-- [ ] Remove the chown branch from metadata preservation.
-
-  A non-root user normally cannot change file ownership. Keep chmod, xattrs
-  and ACL preservation.
