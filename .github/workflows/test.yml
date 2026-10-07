@@ -68,3 +68,14 @@ jobs:
           echo "$RUNNER_TEMP\\age" >>"$GITHUB_PATH"
       - name: Test
         run: ./git-age-test.sh
+
+  # The one check the main branch ruleset requires, whatever the matrix.
+  tests:
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check that every test job passed
+        if: needs.test.result != 'success'
+        run: exit 1
