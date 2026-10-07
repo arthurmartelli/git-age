@@ -12,11 +12,6 @@
 
 ## Medium
 
-- [ ] Test on macOS and Windows.
-
-  Add `macos-latest` and `windows-latest` to CI; no test runs the macOS and
-  Windows branches of the safe replacement today.
-
 - [ ] Keep only the pinned recipients hash from `git-age trust`.
 
   Remove the "last changed by someone else" warning, which relies on

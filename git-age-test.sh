@@ -10,9 +10,16 @@
 #   GIT_AGE=/path/to/git-age git-age-test.sh
 #   KEEP=1 git-age-test.sh     # keep the temporary directory for inspection
 #
-# Requires: git, age, age-keygen.
+# Requires: git, age, age-keygen, python3. Runs on Linux, macOS and Windows
+# (Git Bash).
 
 set -euo pipefail
+
+case $(uname -s) in
+  Darwin) platform=macos ;;
+  MINGW* | MSYS* | CYGWIN*) platform=windows ;;
+  *) platform=linux ;;
+esac
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 GIT_AGE=${GIT_AGE:-$script_dir/git-age}
@@ -54,6 +61,12 @@ EOF
 mkdir -p "$tmp/bin" "$tmp/keys"
 ln -s "$GIT_AGE" "$tmp/bin/git-age"
 export PATH=$tmp/bin:$PATH
+# git-age runs with python3, which Python for Windows calls python.
+if ! command -v python3 >/dev/null && command -v python >/dev/null; then
+  printf '#!/bin/sh\nexec python "$@"\n' >"$tmp/bin/python3"
+  chmod +x "$tmp/bin/python3"
+fi
+command -v python3 >/dev/null || { echo "missing dependency: python3" >&2; exit 2; }
 
 for name in alice bob carol dave; do
   age-keygen -o "$tmp/keys/$name" 2>/dev/null
@@ -119,6 +132,11 @@ head_is_locked() { git show "HEAD:$1" | head -c 21 | grep -q '^age-encryption.or
 decrypts_as() { [[ $(age -d -i "$tmp/keys/$1" "$2" 2>/dev/null) == "$3" ]]; }
 head_decrypts_as() { [[ $(git show "HEAD:$2" | age -d -i "$tmp/keys/$1" 2>/dev/null) == "$3" ]]; }
 not() { ! "$@"; }
+mode_is() {
+  [[ $(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o7777)[2:])' "$1") == "$2" ]]
+}
+# sed_i SCRIPT FILE: edit FILE in place; BSD and GNU sed disagree on -i.
+sed_i() { sed "$1" "$2" >"$2.sed" && mv "$2.sed" "$2"; }
 clean_tree() { [[ -z $(git status --porcelain) ]]; }
 commit() { git commit -q -m "$1" </dev/null; }
 
@@ -131,9 +149,29 @@ status_is() {
   [[ $("$GIT_AGE" "${args[@]}" status --porcelain 2>/dev/null) == "$(printf '%s\n' "$@")" ]]
 }
 
+# on_terminal COMMAND: run the shell COMMAND on a pseudo-terminal.
+if [[ $platform == macos ]]; then
+  on_terminal() { script -q /dev/null sh -c "$1"; }
+else
+  on_terminal() { script -qec "$1" /dev/null; }
+fi
+has_terminal() { [[ $platform != windows ]] && command -v script >/dev/null; }
+
+# without_terminal COMMAND...: run COMMAND without a controlling terminal,
+# which native Windows programs never have.
+without_terminal() {
+  if [[ $platform == windows ]]; then
+    "$@"
+  elif command -v setsid >/dev/null; then
+    setsid -w "$@"
+  else
+    python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+  fi
+}
+
 # answer REPLIES MESSAGE: commit on a terminal, answering the hook's prompt.
 answer() {
-  printf '%b' "$1" | script -qec "git commit -q -m '$2'" /dev/null
+  printf '%b' "$1" | on_terminal "git commit -q -m '$2'"
 }
 
 # --- end to end: a working team setup ---------------------------------------
@@ -179,8 +217,11 @@ section "lock / unlock are all-or-nothing"
 
 no_leftovers() { [[ -z $(find . -name '.*.git-age-*' -print -quit) ]]; }
 
-# root reads files whatever their mode, so it cannot test this.
-if [[ $(id -u) -ne 0 ]]; then
+# root reads files whatever their mode, so it cannot test this; nor can
+# Windows, where chmod does not take away read access.
+if [[ $platform == windows ]]; then
+  echo "  skip  unreadable files (Windows)"
+elif [[ $(id -u) -ne 0 ]]; then
   chmod 000 secret.env
   refuse "lock fails on an unreadable file" "secret.env" "$GIT_AGE" lock
   chmod 644 secret.env
@@ -201,21 +242,24 @@ echo 'API_TOKEN=s3cr3t' >secret.env
 
 section "lock / unlock keep file metadata"
 
-has_acl() { getfacl -cn "$2" 2>/dev/null | grep -q "^$1"; }
-xattr_is() {
-  [[ $(python3 -c 'import os, sys; print(os.getxattr(sys.argv[1], sys.argv[2]).decode())' \
-    "$2" "$1" 2>/dev/null) == "$3" ]]
-}
-keeps_metadata() {
-  check "$1 keeps the mode" bash -c '[[ $(stat -c %a secret.env) == 640 ]]'
-  check "$1 keeps the ACL" has_acl user:65534:r-- secret.env
-  check "$1 keeps the extended attribute" xattr_is user.git-age-test secret.env kept
-  check "$1 adds no default ACL to a file without it" \
-    not has_acl user:65534: config/credentials.yaml
-}
-
-if command -v setfacl >/dev/null && setfacl -m u:65534:r secret.env 2>/dev/null &&
+# Each platform keeps metadata its own way: Linux copies extended
+# attributes, POSIX ACLs included; macOS calls copyfile(3); Windows lets
+# ReplaceFileW carry the ACL and streams over and restores the attributes.
+if [[ $platform == linux ]] && command -v setfacl >/dev/null &&
+  setfacl -m u:65534:r secret.env 2>/dev/null &&
   python3 -c 'import os; os.setxattr("secret.env", "user.git-age-test", b"kept")' 2>/dev/null; then
+  has_acl() { getfacl -cn "$2" 2>/dev/null | grep -q "^$1"; }
+  xattr_is() {
+    [[ $(python3 -c 'import os, sys; print(os.getxattr(sys.argv[1], sys.argv[2]).decode())' \
+      "$2" "$1" 2>/dev/null) == "$3" ]]
+  }
+  keeps_metadata() {
+    check "$1 keeps the mode" mode_is secret.env 640
+    check "$1 keeps the ACL" has_acl user:65534:r-- secret.env
+    check "$1 keeps the extended attribute" xattr_is user.git-age-test secret.env kept
+    check "$1 adds no default ACL to a file without it" \
+      not has_acl user:65534: config/credentials.yaml
+  }
   chmod 640 secret.env
   # New files in config/ would get this ACL; credentials.yaml has none.
   setfacl -d -m u:65534:rw config
@@ -228,6 +272,57 @@ if command -v setfacl >/dev/null && setfacl -m u:65534:r secret.env 2>/dev/null 
   setfacl -k config
   chmod 644 secret.env
   python3 -c 'import os; os.removexattr("secret.env", "user.git-age-test")'
+elif [[ $platform == macos ]]; then
+  has_acl() { ls -le "$2" | grep -F "$1" >/dev/null; }
+  xattr_is() { [[ $(xattr -p "$1" "$2" 2>/dev/null) == "$3" ]]; }
+  keeps_metadata() {
+    check "$1 keeps the mode" mode_is secret.env 640
+    check "$1 keeps the ACL" has_acl "group:everyone allow read" secret.env
+    check "$1 keeps the extended attribute" xattr_is user.git-age-test secret.env kept
+    check "$1 adds no inherited ACL to a file without it" \
+      not has_acl "group:everyone" config/credentials.yaml
+  }
+  chmod 640 secret.env
+  chmod +a "everyone allow read" secret.env
+  xattr -w user.git-age-test kept secret.env
+  # New files and directories in config/ would get this ACL; credentials.yaml has none.
+  chmod +a "everyone allow write,file_inherit,directory_inherit" config
+  check "lock" "$GIT_AGE" lock
+  keeps_metadata "lock"
+  check "unlock" "$GIT_AGE" unlock
+  keeps_metadata "unlock"
+  check "no temporary files are left" no_leftovers
+  chmod -N secret.env config
+  chmod 644 secret.env
+  xattr -d user.git-age-test secret.env
+elif [[ $platform == windows ]]; then
+  # Keep MSYS from turning icacls's /switches into paths.
+  icacls() { MSYS2_ARG_CONV_EXCL='*' command icacls "$@"; }
+  has_ace() { icacls "$2" | grep -F "$1" >/dev/null; }
+  read_only_and_hidden() {
+    python3 -c 'import os, stat, sys
+wanted = stat.FILE_ATTRIBUTE_READONLY | stat.FILE_ATTRIBUTE_HIDDEN
+sys.exit(os.stat(sys.argv[1]).st_file_attributes & wanted != wanted)' "$1"
+  }
+  stream_is() {
+    [[ $(python3 -c 'import sys; print(open(sys.argv[1]).read())' "$1:$2" 2>/dev/null) == "$3" ]]
+  }
+  keeps_metadata() {
+    check "$1 keeps the read-only and hidden attributes" read_only_and_hidden secret.env
+    check "$1 keeps the ACL" has_ace "Everyone:(R)" secret.env
+    check "$1 keeps the alternate data stream" stream_is secret.env git-age-test kept
+  }
+  icacls secret.env /grant '*S-1-1-0:(R)' >/dev/null
+  python3 -c 'open("secret.env:git-age-test", "w").write("kept")'
+  attrib +R +H secret.env
+  check "lock" "$GIT_AGE" lock
+  keeps_metadata "lock"
+  check "unlock" "$GIT_AGE" unlock
+  keeps_metadata "unlock"
+  check "no temporary files are left" no_leftovers
+  attrib -R -H secret.env
+  icacls secret.env /remove '*S-1-1-0' >/dev/null
+  python3 -c 'import os; os.remove("secret.env:git-age-test")'
 else
   printf '  skip  no ACL or extended attribute support here\n'
 fi
@@ -313,7 +408,7 @@ git checkout -q -- secret.env 2>/dev/null || true
 
 section "errors: recipient change without rekey"
 
-sed -i '/# Carol/,+1d' .gitage
+sed_i '/# Carol/{N;d;}' .gitage
 git add .gitage
 refuse "hook refuses [recipients] change with stale ciphertext" \
   "still encrypted to the previous list" git commit -q -m "remove carol"
@@ -354,7 +449,7 @@ age -r "$alice" -o "$tmp/keys/protected.age" "$tmp/keys/alice"
 refuse "passphrase-protected (encrypted) identity" "encrypted (passphrase-protected) age identity" \
   "$GIT_AGE" unlock -i "$tmp/keys/protected.age"
 "$GIT_AGE" unlock >/dev/null
-sed -i '/# Carol/,+1d' .gitage
+sed_i '/# Carol/{N;d;}' .gitage
 warns "lock warns when your identity is not a recipient" "is not among the recipients" \
   "$GIT_AGE" lock -i "$tmp/keys/carol"
 git checkout -q -- .gitage
@@ -420,8 +515,13 @@ printf '[files]\n*.env\n\n[recipients]\n%s\n' "$alice" >"$tmp/gitage.linked"
 ln -s "$tmp/gitage.linked" .gitage
 printf '[files]\nx.env\n' >sub/.gitage
 echo x >sub/x.env
-refuse "neither its rules nor its recipients apply" "no encryption key configured" \
-  git -c age.keyFile= age lock
+# Git Bash copies instead of linking unless symbolic links are enabled.
+if [[ -L .gitage ]]; then
+  refuse "neither its rules nor its recipients apply" "no encryption key configured" \
+    git -c age.keyFile= age lock
+else
+  echo "  skip  symbolic links are unavailable here"
+fi
 cd "$repo3"
 
 section "dry runs"
@@ -529,8 +629,8 @@ section "hooks: interactive"
 echo changed >top.env
 git add -A
 refuse "without a terminal the commit is aborted" "interactive confirmation is unavailable" \
-  setsid -w git commit -q -m "no terminal"
-if command -v script >/dev/null; then
+  without_terminal git commit -q -m "no terminal"
+if has_terminal; then
   refuse "answering a aborts the commit" "commit aborted" answer 'a\n' "aborted"
   check "answering e encrypts and commits" answer 'e\n' "encrypted"
   check "HEAD stores the edit encrypted" head_decrypts_as alice top.env changed
@@ -540,7 +640,7 @@ if command -v script >/dev/null; then
   check "c, then commit, commits plaintext" answer 'c\ncommit\n' "plaintext"
   check "HEAD stores it as plaintext" bash -c '[[ $(git show HEAD:top.env) == plain ]]'
 else
-  echo "  skip  interactive prompts (script(1) is not installed)"
+  echo "  skip  interactive prompts (no script(1) here)"
 fi
 
 section "per-directory recipients"
@@ -632,7 +732,7 @@ check "trust shows the change it accepts" \
 check "lock works once the change is trusted" "$GIT_AGE" lock
 
 "$GIT_AGE" unlock >/dev/null
-sed -i '$d' .gitage
+sed_i '$d' .gitage
 refuse "your own uncommitted edits need trust too" "(uncommitted changes)" "$GIT_AGE" lock
 echo db2 >prod/db.env
 git add -A
@@ -802,7 +902,9 @@ section "status is read-only"
 
 attributes=$(git rev-parse --git-path info/attributes)
 cp .gitage "$tmp/gitage.saved"
-sed -i '/^\[files\]$/a *.secret' .gitage
+sed_i '/^\[files\]$/a\
+*.secret
+' .gitage
 before_attributes=$(cat "$attributes")
 check "status after a .gitage change" "$GIT_AGE" status
 check "leaves info/attributes alone" \
@@ -1100,7 +1202,10 @@ section "edit"
 git add -A && commit "secrets"
 cat >"$tmp/append-editor" <<'EOF'
 #!/bin/sh
-printf '%s %s\n' "$(stat -c %a "${1%/*}")" "$1" >"${0%/*}/edited-where"
+python3 -c 'import os, sys
+path = sys.argv[1]
+print(oct(os.stat(os.path.dirname(path)).st_mode & 0o777)[2:], path.replace(os.sep, "/"))' "$1" \
+  >"${0%/*}/edited-where"
 printf 'NEW=1\n' >>"$1"
 EOF
 printf '#!/bin/sh\nprintf "NEW=1\\n" >>"$1"\nexit 1\n' >"$tmp/failing-editor"
@@ -1114,14 +1219,20 @@ check "edit opens the editor and re-encrypts the change" \
   env EDITOR="$tmp/append-editor" "$GIT_AGE" edit a.env
 check "the file is still locked" is_locked a.env
 check "and decrypts to the edited content" decrypts_as alice a.env $'a\nNEW=1'
+# Windows has no mode bits, and gives the editor a Windows path.
+if [[ $platform == windows ]]; then
+  edited_where="^[0-7]* $(cygpath -m "$repo7")"
+else
+  edited_where="^700 $repo7"
+fi
 check "the editor saw a private copy inside the Git directory" \
-  grep -q "^700 $repo7/.git/git-age-edit-[^/]*/a.env\$" "$tmp/edited-where"
+  grep -q "$edited_where/.git/git-age-edit-[^/]*/a.env\$" "$tmp/edited-where"
 check "the decrypted copy is gone" no_edit_leftovers
 check "edit -C sub FILE is relative to -C" \
-  env EDITOR="sed -i s/b/B/" "$GIT_AGE" -C sub edit b.env
+  env EDITOR="perl -pi -e s/b/B/" "$GIT_AGE" -C sub edit b.env
 check "it edited sub/b.env" decrypts_as alice sub/b.env B
 check "editing it back reuses the committed ciphertext" \
-  bash -c 'EDITOR="sed -i s/B/b/" "$0" edit sub/b.env && git diff --quiet -- sub/b.env' "$GIT_AGE"
+  bash -c 'EDITOR="perl -pi -e s/B/b/" "$0" edit sub/b.env && git diff --quiet -- sub/b.env' "$GIT_AGE"
 cp a.env "$tmp/a.env.before"
 refuse "a failing editor is an error" "exit status 1; a.env was not changed" \
   env EDITOR="$tmp/failing-editor" "$GIT_AGE" edit a.env
@@ -1190,9 +1301,15 @@ refuse "an ambiguous prefix is refused" "ambiguous help topic 'g'" "$GIT_AGE" he
 refuse "internal commands are not help topics" "unknown help topic 'textconv'" "$GIT_AGE" help textconv
 check "--help points to the manual" bash -c '"$0" --help | grep -qF "git-age help"' "$GIT_AGE"
 check "help needs no repository or key" "$GIT_AGE" -C "$tmp" help keys
-check "on a terminal, the manual goes through Git's pager" \
-  bash -c 'GIT_PAGER="sed s/^/paged:/" script -qec "$0 help" /dev/null </dev/null |
-    tr -d "\r" | grep -qx "paged:QUICK START"' "$GIT_AGE"
+pages_help() {
+  GIT_PAGER="sed s/^/paged:/" on_terminal "$(printf %q "$GIT_AGE") help" </dev/null |
+    tr -d "\r" | grep -x "paged:QUICK START" >/dev/null
+}
+if has_terminal; then
+  check "on a terminal, the manual goes through Git's pager" pages_help
+else
+  echo "  skip  the pager (no script(1) here)"
+fi
 check "without a terminal, it is printed plainly" \
   bash -c 'GIT_PAGER="sed s/^/paged:/" "$0" help | grep -qx "QUICK START"' "$GIT_AGE"
 
