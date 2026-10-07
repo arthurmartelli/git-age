@@ -12,9 +12,4 @@
 
 ## Medium
 
-- [ ] Keep only the pinned recipients hash from `git-age trust`.
-
-  Remove the "last changed by someone else" warning, which relies on
-  `user.email` and protects against the same threat less reliably.
-
 - [ ] Improve gitignore pattern matching to follow Git semantics more exactly.

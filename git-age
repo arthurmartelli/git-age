@@ -3238,8 +3238,7 @@ def _trusted_changes(git: Git, lists: RecipientLists, pinned: str) -> list[str]:
 def check_recipient_trust(config: Config) -> None:
     """
     Before encrypting to .gitage's [recipients]: refuse when they differ
-    from the pinned hash; without a pin, warn when someone else changed
-    them last. Checks once per run.
+    from the pinned hash. Checks once per run.
     """
 
     scopes = config.scopes
@@ -3252,57 +3251,22 @@ def check_recipient_trust(config: Config) -> None:
 
     lists = scopes.repository.recipient_lists()
     pinned = _pinned_trust(git.root)
-    if pinned is not None:
-        value, source = pinned
-        if trust_hash(lists) == value:
-            return
-        _err(
-            f"git-age: the [{RECIPIENTS_SECTION}] lists differ from the ones you trusted "
-            f"({source}):",
-            "",
-            *_trusted_changes(git, lists, value),
-            "",
-            "Review the changes, then trust the current lists:",
-            "",
-            "  git-age trust",
-            "",
-        )
-        raise RuntimeError(f"refusing to encrypt to untrusted [{RECIPIENTS_SECTION}]")
-
-    change = _last_recipient_change(git)
-    me = (_git_config_get(git.root, "user.email") or "").lower()
-    if change is None or change.email.lower() == me:
+    if pinned is None:
+        return
+    value, source = pinned
+    if trust_hash(lists) == value:
         return
     _err(
-        f"git-age: warning: [{RECIPIENTS_SECTION}] were last changed by someone else:",
-        f"  {change}",
-        "Make sure you trust that change; `git-age trust` pins the current lists, so",
-        "that git-age refuses to encrypt to lists you have not seen.",
+        f"git-age: the [{RECIPIENTS_SECTION}] lists differ from the ones you trusted ({source}):",
+        "",
+        *_trusted_changes(git, lists, value),
+        "",
+        "Review the changes, then trust the current lists:",
+        "",
+        "  git-age trust",
+        "",
     )
-
-
-def _last_recipient_change(git: Git) -> GitageCommit | None:
-    """
-    The newest commit that changed a [recipients] list. A merge counts only
-    when its lists differ from every parent's; otherwise the change is the
-    merged branch's, and its own commit counts.
-    """
-
-    hashes: dict[str, str] = {}
-
-    def hash_at(rev: str) -> str:
-        if rev not in hashes:
-            lists = recipient_lists_at(git, rev) if git.has_commit(rev) else {}
-            hashes[rev] = trust_hash(lists)
-        return hashes[rev]
-
-    for commit in _gitage_commits(git, ["HEAD"]):
-        parents = git.run(["rev-parse", f"{commit.commit}^@"]).stdout.decode("ascii").split()
-        # A root commit compares with no lists at all.
-        parents = parents or [f"{commit.commit}^"]
-        if all(hash_at(commit.commit) != hash_at(parent) for parent in parents):
-            return commit
-    return None
+    raise RuntimeError(f"refusing to encrypt to untrusted [{RECIPIENTS_SECTION}]")
 
 
 def warn_merged_recipient_changes(git: Git) -> None:

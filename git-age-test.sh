@@ -484,11 +484,8 @@ cd "$tmp/repo-scoped"
 unlock
 printf '# Mallory\n%s\n' "$bob" >>prod/.gitage
 git add prod/.gitage && mallory commit -q --no-verify -m "add a key"
-warns "without a pin, lock warns about someone else's change" "Mallory <mallory@example.invalid>" git-age lock
-unlock
-check "trust pins the lists in age.trustedRecipients, and lock stops warning" \
-  'git-age trust && [[ $(git-age trust --show) == $(git config age.trustedRecipients) ]] &&
-   ! git-age lock 2>&1 | grep -q "someone else"'
+check "trust pins the lists in age.trustedRecipients" \
+  'git-age trust && [[ $(git-age trust --show) == $(git config age.trustedRecipients) ]]'
 unlock
 echo "$dave" >>.gitage
 git add .gitage && mallory commit -q --no-verify -m "widen access"
@@ -508,21 +505,6 @@ echo "$carol" >>.gitage
 git add .gitage && mallory commit -q --no-verify -m "sneak a key in"
 git checkout -q main
 warns "post-merge warns when a merge changes [recipients]" "this merge changes [recipients]" git merge -q mallory
-
-new_repo repo-merge-trust "$alice"
-echo app >app.env && lock
-git add -A && commit_unchecked init
-git checkout -q -b theirs && echo "$bob" >>.gitage && git commit -q --no-verify -am "theirs: add bob"
-git checkout -q main && echo "$carol" >>.gitage && git commit -q --no-verify -am "main: add carol"
-git merge -q --no-edit theirs >/dev/null 2>&1 || true
-gitage "$alice" "$bob" "$carol" "$dave" >.gitage
-git add .gitage && mallory commit -q --no-verify -m "merge theirs"
-unlock
-warns "a [recipients] change made in a merge counts" "merge theirs" git-age lock
-git reset -q --hard HEAD~1
-mallory merge -q --no-edit -X theirs theirs >/dev/null 2>&1
-unlock
-check "a merge that takes one side's lists does not" '! git-age lock 2>&1 | grep -q "someone else"'
 
 # --- merges -----------------------------------------------------------------------
 
