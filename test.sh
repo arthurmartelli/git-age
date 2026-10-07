@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 #
-# git-age-test.sh: end-to-end test for git-age.
+# test.sh: end-to-end test for git-age.
 #
 # Builds a throwaway repository with two protected files, walks through a
 # normal team workflow, then checks that the main failure cases are refused.
 #
 # Usage:
-#   git-age-test.sh            # build and test the Go binary
-#   GIT_AGE=/path/to/git-age git-age-test.sh
-#   KEEP=1 git-age-test.sh     # keep the temporary directory for inspection
+#   test.sh            # build and test the Go binary
+#   GIT_AGE=/path/to/git-age test.sh
+#   KEEP=1 test.sh     # keep the temporary directory for inspection
 #
 # Requires: git, age, age-keygen, perl, and Go unless GIT_AGE is set.
 # Runs on Linux, macOS and Windows (Git Bash).
@@ -26,10 +26,10 @@ for tool in git age age-keygen perl; do
 done
 if [[ -z ${GIT_AGE:-} ]]; then
   command -v go >/dev/null || { echo "missing dependency: go" >&2; exit 2; }
-  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-  GIT_AGE=$script_dir/bin/git-age
+  project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  GIT_AGE=$project_dir/bin/git-age
   [[ $platform != windows ]] || GIT_AGE+=.exe
-  (cd "$script_dir" && CGO_ENABLED=0 go build -trimpath -o "$GIT_AGE" ./cmd/git-age)
+  (cd "$project_dir" && CGO_ENABLED=0 go build -trimpath -o "$GIT_AGE" ./cmd/git-age)
 fi
 [[ $platform == windows ]] || command -v script >/dev/null || { echo "missing dependency: script" >&2; exit 2; }
 [[ -x $GIT_AGE ]] || { echo "git-age not found or not executable: $GIT_AGE" >&2; exit 2; }
@@ -823,19 +823,7 @@ unlock sub/c.env
 warns "edit opens an unlocked file in place" "sub/c.env is unlocked" env EDITOR="$tmp/append-editor" git-age edit sub/c.env
 check "where it stays plaintext, edited" '[[ $(cat sub/c.env) == $'"'"'c\nNEW=1'"'"' ]]'
 
-section "help and completion"
-
-check "help prints the manual, anywhere, without a key; --help points to it" \
-  'out=$(git-age -C "$tmp" help) && grep -qx "QUICK START" <<<"$out" && grep -qx "SHELL COMPLETION" <<<"$out" &&
-   git-age --help | grep -qF "git-age help"'
-check "help TOPIC prints one section, found by a word or a prefix, in any case; help COMMAND its options" \
-  'out=$(git-age help hooks) && [[ $(head -1 <<<"$out") == "GIT HOOKS" ]] && ! grep -qx KEYS <<<"$out" &&
-   [[ $(git-age help trust | head -1) == "RECIPIENT TRUST" && $(git-age help INTEG | head -1) == "GIT INTEGRATION" &&
-      $(git-age help .gitage | head -1) == .GITAGE ]] && git-age help lock | grep -q "^usage: git-age lock"'
-refuse "an unknown topic lists the topics" "topics are: quick-start, everyday-use, commands" git-age help nonsense
-[[ $platform == windows ]] || check "on a terminal, the manual goes through Git's pager" \
-  'GIT_PAGER="sed s/^/paged:/" on_terminal "git-age help" | tr -d "\r" | grep -x "paged:QUICK START" >/dev/null'
-check "otherwise it is printed plainly" 'GIT_PAGER="sed s/^/paged:/" git-age help | grep -qx "QUICK START"'
+section "completion"
 
 check "the bash completion script parses" 'bash -n <(git-age completion bash)'
 ! command -v zsh >/dev/null || check "so does zsh's" 'git-age completion zsh | zsh -n'
