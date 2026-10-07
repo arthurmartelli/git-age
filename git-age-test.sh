@@ -179,11 +179,16 @@ section "lock / unlock are all-or-nothing"
 
 no_leftovers() { [[ -z $(find . -name '.*.git-age-*' -print -quit) ]]; }
 
-chmod 000 secret.env
-refuse "lock fails on an unreadable file" "secret.env" "$GIT_AGE" lock
-chmod 644 secret.env
-check "the readable file was not locked either" not is_locked config/credentials.yaml
-check "no temporary files are left" no_leftovers
+# root reads files whatever their mode, so it cannot test this.
+if [[ $(id -u) -ne 0 ]]; then
+  chmod 000 secret.env
+  refuse "lock fails on an unreadable file" "secret.env" "$GIT_AGE" lock
+  chmod 644 secret.env
+  check "the readable file was not locked either" not is_locked config/credentials.yaml
+  check "no temporary files are left" no_leftovers
+else
+  echo "  skip  unreadable files (running as root)"
+fi
 
 "$GIT_AGE" lock >/dev/null
 age -r "$carol" -o secret.env.carol <<<'API_TOKEN=s3cr3t'

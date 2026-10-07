@@ -1,5 +1,7 @@
 # git-age
 
+[![test](https://github.com/arthurmartelli/git-age/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/arthurmartelli/git-age/actions/workflows/test.yml)
+
 Keep secrets in Git, encrypted with [age](https://github.com/FiloSottile/age).
 
 A `.gitage` file defines which files are protected and who can decrypt them.
