@@ -178,12 +178,17 @@ Supported syntax includes:
     *           match within one directory
     **          match across directories
     ?           match one character
-    [...]       character classes
+    [...]       character classes, such as [a-z] or [[:digit:]]
     !pattern    exclude a previous match
     /pattern    anchor at this `.gitage`
     directory/  match a directory
 
-The last matching pattern wins.
+The last matching pattern wins. As in Git, a file inside a protected
+directory stays protected, so `!pattern` cannot exclude it: protect
+`secrets/**` rather than `secrets/` to exclude files in `secrets/`.
+
+Patterns ignore case when Git's `core.ignoreCase` is set. A pattern Git
+would never match, such as one with an unterminated `[`, is an error.
 
 Escape a pattern that looks like a section name:
 
@@ -934,7 +939,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field, replace
-from functools import cache, partial
+from functools import cache, cached_property, partial
 from typing import Any, Callable, Iterable, Iterator, NamedTuple, TextIO
 
 
@@ -1066,11 +1071,14 @@ class Rule:
     glob: str = field(init=False)
     anchored: bool = field(init=False)
     directory_only: bool = field(init=False)
-    regex: re.Pattern[str] = field(init=False, repr=False)
+    regex: re.Pattern[bytes] = field(init=False, repr=False)
+    folded_regex: re.Pattern[bytes] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         glob = self.pattern
-        self.directory_only = glob.endswith("/") and not glob.endswith("\\/")
+        # Like Git, even after a backslash: the pattern then ends with one,
+        # which _glob_to_regex rejects.
+        self.directory_only = glob.endswith("/")
         if self.directory_only:
             glob = glob[:-1]
         self.anchored = glob.startswith("/")
@@ -1078,20 +1086,26 @@ class Rule:
             glob = glob[1:]
         self.glob = glob
         self.regex = _glob_to_regex(glob)
+        self.folded_regex = _glob_to_regex(glob, ignore_case=True)
 
-    def matches(self, relative_path: pathlib.PurePosixPath) -> bool:
-        """Whether the rule matches a path relative to its .gitage's directory."""
+    def matches(
+        self, relative_path: pathlib.PurePosixPath, *, is_directory: bool, ignore_case: bool
+    ) -> bool:
+        """
+        Whether the rule matches a path relative to its .gitage's directory.
+        Only the path itself: Repository.protection applies the rule to the
+        directories above it.
+        """
 
-        parts = relative_path.parts
-        if not self.glob or not parts:
+        if not self.glob or not relative_path.parts or (self.directory_only and not is_directory):
             return False
 
         if not self.anchored and "/" not in self.glob:
-            candidates = parts[:-1] if self.directory_only else parts
-            return any(self.regex.fullmatch(component) for component in candidates)
-
-        stop = len(parts) - 1 if self.directory_only else len(parts)
-        return any(self.regex.fullmatch("/".join(parts[:length])) for length in range(1, stop + 1))
+            subject = relative_path.name
+        else:
+            subject = relative_path.as_posix()
+        regex = self.folded_regex if ignore_case else self.regex
+        return regex.fullmatch(os.fsencode(subject)) is not None
 
 
 @dataclass
@@ -1622,6 +1636,8 @@ class Repository:
     top_rule_file: pathlib.Path
     recipients: list[str] | None = None
     staged: bool = False
+    # Git's core.ignoreCase, which makes gitignore patterns case-insensitive.
+    ignore_case: bool = False
     _baselines: dict[tuple[pathlib.Path, bool], Baseline | None] = field(
         default_factory=dict, init=False, repr=False
     )
@@ -1638,7 +1654,8 @@ class Repository:
             (rule_set.recipients for rule_set in rule_sets if rule_set.path == top_file), None
         )
         rule_sets = sorted(rule_sets, key=lambda item: (len(item.root.parts), item.path.as_posix()))
-        return cls(root, git, rule_sets, top_file, recipients, staged)
+        ignore_case = git is not None and git.ignore_case
+        return cls(root, git, rule_sets, top_file, recipients, staged, ignore_case)
 
     @classmethod
     def from_working_tree(cls, root: pathlib.Path) -> Repository:
@@ -1750,14 +1767,32 @@ class Repository:
             return None
 
         absolute = self.root.joinpath(*relative_path.parts)
+        rule_sets = [
+            rule_set for rule_set in self.rule_sets if absolute.is_relative_to(rule_set.root)
+        ]
+        if not rule_sets:
+            return None
+
+        # Like Git, judge each directory on the way down: once one is
+        # protected, so is everything below it, whatever the negations.
+        top = rule_sets[0].root
+        levels = absolute.relative_to(top).parts
         protection: Protection | None = None
-        for rule_set in self.rule_sets:
-            if not absolute.is_relative_to(rule_set.root):
-                continue
-            relative = pathlib.PurePosixPath(absolute.relative_to(rule_set.root).as_posix())
-            for rule in rule_set.rules:
-                if rule.matches(relative):
-                    protection = None if rule.negate else Protection(rule, rule_set.path)
+        for depth in range(1, len(levels) + 1):
+            path = top.joinpath(*levels[:depth])
+            is_directory = depth < len(levels)
+            protection = None
+            for rule_set in rule_sets:
+                if not path.is_relative_to(rule_set.root):
+                    continue
+                relative = pathlib.PurePosixPath(path.relative_to(rule_set.root).as_posix())
+                for rule in rule_set.rules:
+                    if rule.matches(
+                        relative, is_directory=is_directory, ignore_case=self.ignore_case
+                    ):
+                        protection = None if rule.negate else Protection(rule, rule_set.path)
+            if protection is not None:
+                break
         return protection
 
     def recipient_chain(
@@ -1937,7 +1972,10 @@ def parse_gitage_text(path: pathlib.Path, contents: str) -> RuleSet:
                 if not line:
                     raise RuntimeError(f"{path}:{line_number}: empty negation rule")
 
-            rules.append(Rule(pattern=line, negate=negate, line_number=line_number))
+            try:
+                rules.append(Rule(pattern=line, negate=negate, line_number=line_number))
+            except ValueError as exc:
+                raise RuntimeError(f"{path}:{line_number}: {exc}") from exc
 
         elif section == RECIPIENTS_SECTION:
             assert recipients is not None
@@ -1961,73 +1999,158 @@ def parse_gitage_text(path: pathlib.Path, contents: str) -> RuleSet:
 # ---------------------------------------------------------------------------
 
 
-def _glob_to_regex(pattern: str) -> re.Pattern[str]:
-    output: list[str] = []
+def _ascii_bytes(predicate: Callable[[str], bool]) -> frozenset[int]:
+    return frozenset(byte for byte in range(128) if predicate(chr(byte)))
+
+
+# Git's wildmatch classifies bytes, and only ASCII ones belong to a class.
+_CHARACTER_CLASSES = {
+    "alnum": _ascii_bytes(str.isalnum),
+    "alpha": _ascii_bytes(str.isalpha),
+    "blank": frozenset(b" \t"),
+    "cntrl": frozenset([*range(32), 127]),
+    "digit": _ascii_bytes(str.isdigit),
+    "graph": frozenset(range(33, 127)),
+    "lower": _ascii_bytes(str.islower),
+    "print": frozenset(range(32, 127)),
+    "punct": _ascii_bytes(lambda char: char.isprintable() and not char.isalnum() and char != " "),
+    "space": frozenset(b" \t\n\r"),
+    "upper": _ascii_bytes(str.isupper),
+    "xdigit": _ascii_bytes(lambda char: char in "0123456789abcdefABCDEF"),
+}
+
+
+def _glob_to_regex(pattern: str, *, ignore_case: bool = False) -> re.Pattern[bytes]:
+    """
+    Translate a gitignore glob into a regex over a path's bytes, the way
+    Git's wildmatch reads it. Git never matches a malformed glob; raise
+    ValueError instead, since that would leave files unprotected.
+    """
+
+    glob = os.fsencode(pattern)
+    output: list[bytes] = []
     index = 0
 
-    while index < len(pattern):
-        char = pattern[index]
+    while index < len(glob):
+        char = glob[index : index + 1]
 
-        if char == "\\":
+        if char == b"\\":
             index += 1
-            if index >= len(pattern):
-                output.append(re.escape("\\"))
-                break
-            output.append(re.escape(pattern[index]))
-            index += 1
-            continue
-
-        if char == "*":
-            if index + 1 < len(pattern) and pattern[index + 1] == "*":
-                while index + 1 < len(pattern) and pattern[index + 1] == "*":
-                    index += 1
-
-                if index + 1 < len(pattern) and pattern[index + 1] == "/":
-                    output.append("(?:.*/)?")
-                    index += 2
-                else:
-                    output.append(".*")
-                    index += 1
-                continue
-
-            output.append("[^/]*")
+            if index >= len(glob):
+                raise ValueError("pattern ends with an unescaped backslash")
+            output.append(re.escape(glob[index : index + 1]))
             index += 1
             continue
 
-        if char == "?":
-            output.append("[^/]")
-            index += 1
-            continue
-
-        if char == "[":
-            close = index + 1
-            if close < len(pattern) and pattern[close] in "!^":
-                close += 1
-            if close < len(pattern) and pattern[close] == "]":
-                close += 1
-            while close < len(pattern) and pattern[close] != "]":
-                close += 1
-
-            if close >= len(pattern):
-                output.append(re.escape("["))
+        if char == b"*":
+            start = index
+            while glob[index : index + 1] == b"*":
                 index += 1
-                continue
+            # ** is special only as a whole path component; otherwise it is *.
+            if index - start > 1 and glob[start - 1 : start] in (b"", b"/"):
+                if index == len(glob):
+                    output.append(b".*")
+                    continue
+                if glob[index : index + 1] == b"/":
+                    output.append(b"(?:.*/)?")
+                    index += 1
+                    continue
+            output.append(b"[^/]*")
+            continue
 
-            stuff = pattern[index + 1 : close]
-            if stuff.startswith("!"):
-                stuff = "^" + stuff[1:]
-            elif stuff.startswith("^"):
-                stuff = "\\" + stuff
+        if char == b"?":
+            output.append(b"[^/]")
+            index += 1
+            continue
 
-            stuff = stuff.replace("\\", "\\\\")
-            output.append(f"[{stuff}]")
-            index = close + 1
+        if char == b"[":
+            members, index = _bracket_members(glob, index + 1, ignore_case=ignore_case)
+            output.append(
+                b"[" + b"".join(b"\\x%02x" % byte for byte in sorted(members)) + b"]"
+                if members
+                else b"(?!)"
+            )
             continue
 
         output.append(re.escape(char))
         index += 1
 
-    return re.compile("".join(output))
+    return re.compile(b"".join(output), re.DOTALL | (re.IGNORECASE if ignore_case else 0))
+
+
+def _bracket_members(glob: bytes, index: int, *, ignore_case: bool) -> tuple[set[int], int]:
+    """
+    The bytes that the [...] expression whose contents start at index
+    matches, and the index after its ']'. Like Git, a ']' first is a member,
+    and no expression matches '/'.
+    """
+
+    def unterminated() -> ValueError:
+        return ValueError("pattern has an unterminated [")
+
+    negated = glob[index : index + 1] in (b"!", b"^")
+    if negated:
+        index += 1
+
+    members: set[int] = set()
+    # The last single byte, which a following '-' makes the start of a range.
+    previous: int | None = None
+    first = True
+    while True:
+        if index >= len(glob):
+            raise unterminated()
+        byte = glob[index]
+        if byte == ord("]") and not first:
+            break
+        first = False
+
+        if byte == ord("\\"):
+            index += 1
+            if index >= len(glob):
+                raise unterminated()
+            previous = glob[index]
+            members.add(previous)
+        elif (
+            byte == ord("-")
+            and previous is not None
+            and glob[index + 1 : index + 2] not in (b"", b"]")
+        ):
+            index += 1
+            end = glob[index]
+            if end == ord("\\"):
+                index += 1
+                if index >= len(glob):
+                    raise unterminated()
+                end = glob[index]
+            members.update(range(previous, end + 1))
+            previous = None
+        elif byte == ord("[") and glob[index + 1 : index + 2] == b":":
+            close = glob.find(b"]", index + 2)
+            if close == -1:
+                raise unterminated()
+            if close == index + 2 or glob[close - 1] != ord(":"):
+                # Not [:name:], so the '[' is a member like any other byte.
+                previous = byte
+                members.add(byte)
+            else:
+                name = os.fsdecode(glob[index + 2 : close - 1])
+                if name not in _CHARACTER_CLASSES:
+                    raise ValueError(f"unknown character class [:{name}:]")
+                members |= _CHARACTER_CLASSES[name]
+                previous = None
+                index = close
+        else:
+            previous = byte
+            members.add(byte)
+        index += 1
+
+    if ignore_case:
+        # Before negating: [!a] matches neither a nor A.
+        members |= {ord(chr(byte).swapcase()) for byte in members if chr(byte).isascii()}
+    if negated:
+        members = set(range(256)) - members
+    members.discard(ord("/"))
+    return members, index + 1
 
 
 # ---------------------------------------------------------------------------
@@ -2195,6 +2318,10 @@ class Git:
 
     def config_get(self, key: str, *, value_type: str | None = None) -> str | None:
         return _git_config_get(self.root, key, value_type=value_type)
+
+    @cached_property
+    def ignore_case(self) -> bool:
+        return self.config_get("core.ignorecase", value_type="bool") == "true"
 
     def config_set(self, key: str, value: str | None) -> None:
         """Set key in repo git config, or unset it when value is None."""

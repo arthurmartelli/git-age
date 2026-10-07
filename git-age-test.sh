@@ -308,6 +308,7 @@ done <<'EOF'
 secret.env\n|outside a section
 [files]\nsecret.env\n[nope]\n|unknown section [nope]
 [files]\nsecret.env\n[recipients]\nnot-a-key\n|is not an age recipient
+[files]\nsecret[.env\n|.gitage:2: pattern has an unterminated [
 EOF
 cp "$tmp/gitage.good" .gitage
 
@@ -370,6 +371,20 @@ if [[ -L .gitage ]]; then
 else
   skip "symbolic links are unavailable here"
 fi
+cd "$tmp/repo-nested"
+
+section "patterns match like Git's"
+
+new_repo repo-patterns
+mkdir -p secrets/deep
+for file in secrets/a.txt secrets/public.txt secrets/deep/public.txt PROD.ENV; do echo x >"$file"; done
+printf '[files]\n*.env\nsecrets/**\n!public.txt\n' >.gitage
+git config core.ignorecase false
+check "a negation cannot unprotect a file in a protected directory" \
+  'status_is -- "U. secrets/a.txt" "U. secrets/deep/public.txt"'
+git config core.ignorecase true
+check "patterns ignore case with core.ignoreCase" \
+  'status_is -- "U. PROD.ENV" "U. secrets/a.txt" "U. secrets/deep/public.txt"'
 cd "$tmp/repo-nested"
 
 section "hooks: unlock after commit, empty commits, no .gitage"
