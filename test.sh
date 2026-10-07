@@ -6,12 +6,12 @@
 # normal team workflow, then checks that the main failure cases are refused.
 #
 # Usage:
-#   git-age-test.sh            # test the git-age next to this script
+#   git-age-test.sh            # build and test the Go binary
 #   GIT_AGE=/path/to/git-age git-age-test.sh
 #   KEEP=1 git-age-test.sh     # keep the temporary directory for inspection
 #
-# Requires: git, age, age-keygen, python3. Runs on Linux, macOS and Windows
-# (Git Bash).
+# Requires: git, age, age-keygen, perl, and Go unless GIT_AGE is set.
+# Runs on Linux, macOS and Windows (Git Bash).
 
 set -euo pipefail
 
@@ -21,10 +21,17 @@ case $(uname -s) in
   *) platform=linux ;;
 esac
 
-GIT_AGE=${GIT_AGE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-age}
-for tool in git age age-keygen; do
+for tool in git age age-keygen perl; do
   command -v "$tool" >/dev/null || { echo "missing dependency: $tool" >&2; exit 2; }
 done
+if [[ -z ${GIT_AGE:-} ]]; then
+  command -v go >/dev/null || { echo "missing dependency: go" >&2; exit 2; }
+  script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  GIT_AGE=$script_dir/bin/git-age
+  [[ $platform != windows ]] || GIT_AGE+=.exe
+  (cd "$script_dir" && CGO_ENABLED=0 go build -trimpath -o "$GIT_AGE" ./cmd/git-age)
+fi
+[[ $platform == windows ]] || command -v script >/dev/null || { echo "missing dependency: script" >&2; exit 2; }
 [[ -x $GIT_AGE ]] || { echo "git-age not found or not executable: $GIT_AGE" >&2; exit 2; }
 
 # --- isolated environment ----------------------------------------------------
@@ -46,11 +53,6 @@ printf '[user]\nname = git-age test\nemail = test@example.invalid\n[init]\ndefau
 mkdir -p "$tmp/bin" "$tmp/keys"
 ln -s "$GIT_AGE" "$tmp/bin/git-age"
 export PATH=$tmp/bin:$PATH
-# Python for Windows calls python3 python.
-if ! command -v python3 >/dev/null && command -v python >/dev/null; then
-  printf '#!/bin/sh\nexec python "$@"\n' >"$tmp/bin/python3" && chmod +x "$tmp/bin/python3"
-fi
-command -v python3 >/dev/null || { echo "missing dependency: python3" >&2; exit 2; }
 
 for name in alice bob carol dave; do
   age-keygen -o "$tmp/keys/$name" 2>/dev/null
@@ -90,7 +92,7 @@ clean_tree() { [[ -z $(git status --porcelain) ]]; }
 lock() { git-age lock "$@" >/dev/null; }
 unlock() { git-age unlock "$@" >/dev/null; }
 as() { local who=$1; shift; GIT_AGE_KEY_FILE=$tmp/keys/$who git-age "$@"; }
-mode_is() { [[ $(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o7777)[2:])' "$1") == "$2" ]]; }
+mode_is() { [[ $(perl -e 'printf "%o", (stat $ARGV[0])[2] & 07777' "$1") == "$2" ]]; }
 # drop_carol: remove carol's entry from .gitage.
 drop_carol() { grep -v -e '^# Carol$' -e "^$carol\$" .gitage >.gitage.new && mv .gitage.new .gitage; }
 
@@ -134,14 +136,17 @@ file_list() { find . -path ./.git -prune -o -print | LC_ALL=C sort; }
 # on_terminal COMMAND: run COMMAND on a pseudo-terminal, typing stdin into it.
 # Read all its output: if the reader stops early, COMMAND hangs.
 on_terminal() {
-  python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(["sh", "-c", sys.argv[1]])))' "$1"
+  if [[ $platform == macos ]]; then
+    script -q /dev/null sh -c "$1"
+  else
+    SHELL=/bin/sh script -q -e -c "$1" /dev/null
+  fi
 }
 # without_terminal COMMAND...: run COMMAND without a controlling terminal,
 # which native Windows programs never have.
 without_terminal() {
   if [[ $platform == windows ]]; then "$@"
-  elif command -v setsid >/dev/null; then setsid -w "$@"
-  else python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+  else perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- "$@"
   fi
 }
 # answer REPLIES MESSAGE: commit on a terminal, answering the hook's prompt.
@@ -195,12 +200,12 @@ case $platform in
     has_acl() { getfacl -cn "$2" 2>/dev/null | grep -q "^$1"; }
     set_metadata() {
       command -v setfacl >/dev/null && setfacl -m u:65534:r secret.env 2>/dev/null &&
-        python3 -c 'import os; os.setxattr("secret.env", "user.test", b"kept")' 2>/dev/null &&
+        setfattr -n user.test -v kept secret.env 2>/dev/null &&
         chmod 640 secret.env && chmod 600 config/credentials.yaml && setfacl -d -m u:65534:rw config
     }
     metadata_kept() {
       mode_is secret.env 640 && mode_is config/credentials.yaml 600 && has_acl user:65534:r-- secret.env &&
-        [[ $(python3 -c 'import os; print(os.getxattr("secret.env", "user.test").decode())') == kept ]] &&
+        [[ $(getfattr --only-values -n user.test secret.env) == kept ]] &&
         not has_acl user:65534: config/credentials.yaml
     }
     ;;
@@ -221,13 +226,12 @@ case $platform in
     icacls() { MSYS2_ARG_CONV_EXCL='*' command icacls "$@"; }
     set_metadata() {
       icacls secret.env /grant '*S-1-1-0:(R)' >/dev/null &&
-        python3 -c 'open("secret.env:test", "w").write("kept")' && attrib +R +H secret.env
+        powershell -NoProfile -NonInteractive -Command '[IO.File]::WriteAllText("secret.env:test", "kept")' && attrib +R +H secret.env
     }
     metadata_kept() {
-      python3 -c 'import os, stat, sys; a = os.stat("secret.env").st_file_attributes
-sys.exit(not (a & stat.FILE_ATTRIBUTE_READONLY and a & stat.FILE_ATTRIBUTE_HIDDEN))' &&
+      powershell -NoProfile -NonInteractive -Command '$a = [IO.File]::GetAttributes("secret.env"); if (-not ($a.HasFlag([IO.FileAttributes]::ReadOnly) -and $a.HasFlag([IO.FileAttributes]::Hidden))) { exit 1 }' &&
         icacls secret.env | grep -qF "Everyone:(R)" &&
-        [[ $(python3 -c 'print(open("secret.env:test").read())') == kept ]]
+        [[ $(powershell -NoProfile -NonInteractive -Command '[Console]::Write([IO.File]::ReadAllText("secret.env:test"))') == kept ]]
     }
     ;;
 esac
@@ -789,8 +793,7 @@ lock && git add -A && commit secrets
 # what Git saw in the working tree meanwhile, then appends a line.
 cat >"$tmp/append-editor" <<'EOF'
 #!/bin/sh
-python3 -c 'import os, sys
-print(any(os.stat(p).st_mode & 0o077 == 0 for p in (sys.argv[1], os.path.dirname(sys.argv[1]))))' "$1" >"${0%/*}/edit-private"
+perl -MFile::Basename=dirname -e 'print((grep { ((stat $_)[2] & 077) == 0 } ($ARGV[0], dirname($ARGV[0]))) ? "True\n" : "False\n")' "$1" >"${0%/*}/edit-private"
 git status --porcelain --untracked-files=all >"${0%/*}/edit-status"
 printf 'NEW=1\n' >>"$1"
 EOF
