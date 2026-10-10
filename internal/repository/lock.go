@@ -12,7 +12,6 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/agessh"
-	"golang.org/x/crypto/ssh"
 )
 
 // Lock prepares every replacement before writing, and restores originals on write failure.
@@ -84,10 +83,6 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 		return fmt.Errorf("no recipients configured; use -r, [recipients], or an age identity")
 	}
 
-	type replacement struct {
-		path                string
-		original, encrypted []byte
-	}
 	var replacements []replacement
 	for _, file := range pending {
 		path := filepath.Join(directory, filepath.FromSlash(file.Path))
@@ -133,49 +128,7 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 		}
 		replacements = append(replacements, replacement{path, original, encrypted})
 	}
-	// Detect edits made while encryption was being prepared before changing any file.
-	for _, change := range replacements {
-		info, err := os.Lstat(change.path)
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("%s: no longer a regular file", change.path)
-		}
-		content, err := os.ReadFile(change.path)
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(content, change.original) {
-			return fmt.Errorf("%s: changed while preparing encryption", change.path)
-		}
-	}
-	for i, change := range replacements {
-		if err := writeExisting(change.path, change.encrypted); err != nil {
-			for _, previous := range replacements[:i+1] {
-				if restoreErr := writeExisting(previous.path, previous.original); restoreErr != nil {
-					err = errors.Join(err, fmt.Errorf("restore %s: %w", previous.path, restoreErr))
-				}
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func writeExisting(path string, content []byte) error {
-	file, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	_, writeErr := file.Write(content)
-	if writeErr == nil {
-		writeErr = file.Truncate(int64(len(content)))
-	}
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	return errors.Join(writeErr, file.Close())
+	return replaceFiles(replacements)
 }
 
 func ruleRecipients(path string) ([]string, error) {
@@ -218,82 +171,6 @@ func parseRecipients(values []string) ([]age.Recipient, error) {
 		recipients = append(recipients, recipient)
 	}
 	return recipients, nil
-}
-
-func configValues(directory, key string) ([]string, error) {
-	output, err := exec.Command("git", "-C", directory, "config", "--null", "--get-all", key).Output()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var values []string
-	for _, value := range strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00") {
-		if value == "" {
-			values = nil
-		} else {
-			values = append(values, value)
-		}
-	}
-	return values, nil
-}
-
-func loadIdentities(directory, root string, paths []string) ([]age.Identity, []string, error) {
-	if len(paths) == 0 {
-		paths = filepath.SplitList(os.Getenv("GIT_AGE_KEY_FILE"))
-	}
-	if len(paths) == 0 {
-		var err error
-		paths, err = configValues(directory, "age.keyFile")
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	if len(paths) == 0 {
-		path := filepath.Join(root, ".gitage.key")
-		if _, err := os.Stat(path); err == nil {
-			paths = []string{path}
-		}
-	}
-	var identities []age.Identity
-	var recipients []string
-	for _, path := range paths {
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(directory, path)
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, nil, err
-		}
-		var parsed []age.Identity
-		if bytes.HasPrefix(content, []byte("-----BEGIN")) {
-			identity, err := agessh.ParseIdentity(content)
-			if err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
-			}
-			parsed = []age.Identity{identity}
-			signer, err := ssh.ParsePrivateKey(content)
-			if err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
-			}
-			recipients = append(recipients, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
-		} else {
-			parsed, err = age.ParseIdentities(bytes.NewReader(content))
-			if err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
-			}
-		}
-		for _, identity := range parsed {
-			switch identity := identity.(type) {
-			case *age.X25519Identity:
-				recipients = append(recipients, identity.Recipient().String())
-			}
-		}
-		identities = append(identities, parsed...)
-	}
-	return identities, recipients, nil
 }
 
 func reusableCiphertext(root, path string, rules []string, plaintext []byte, identities []age.Identity) []byte {

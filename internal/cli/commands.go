@@ -26,23 +26,6 @@ func newRekeyCommand() *cobra.Command {
 	return rekey
 }
 
-func newUnlockCommand() *cobra.Command {
-	var options struct {
-		Identities []string
-	}
-
-	unlock := &cobra.Command{
-		Use:   "unlock [PATH ...]",
-		Short: "decrypt protected working-tree files",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  notImplemented,
-	}
-
-	identityFlags(unlock.Flags(), &options.Identities)
-
-	return unlock
-}
-
 func newEditCommand() *cobra.Command {
 	var options struct {
 		Recipients []string
