@@ -15,21 +15,21 @@ import (
 )
 
 func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse bool) error {
-	_, err := encryptFiles(directory, files, explicitRecipients, identityPaths, noReuse, false)
+	_, err := encryptFiles(directory, files, explicitRecipients, identityPaths, noReuse, false, nil)
 	return err
 }
 
 func Rekey(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string) ([]ProtectedFile, error) {
-	return encryptFiles(directory, files, explicitRecipients, identityPaths, true, true)
+	return encryptFiles(directory, files, explicitRecipients, identityPaths, true, true, nil)
 }
 
-func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool) ([]ProtectedFile, error) {
+func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool, edit func(string) error) ([]ProtectedFile, error) {
 	var pending []ProtectedFile
 	for _, file := range files {
 		if file.State == "UNKNOWN" {
 			return nil, fmt.Errorf("cannot determine file state: %s", file.Path)
 		}
-		if rekey || file.State != "LOCKED" {
+		if rekey || edit != nil || file.State != "LOCKED" {
 			pending = append(pending, file)
 		}
 	}
@@ -119,14 +119,14 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 			return nil, err
 		}
 		plaintext := original
-		if rekey && file.State == "LOCKED" {
+		if (rekey || edit != nil) && file.State == "LOCKED" {
 			if len(identities) == 0 {
 				return nil, fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
 			}
 			plaintext, err = decryptContent(original, identities)
 			if err != nil {
 				var noMatch *age.NoIdentityMatchError
-				if errors.As(err, &noMatch) && !containsRecipient(values, own) {
+				if rekey && errors.As(err, &noMatch) && !containsRecipient(values, own) {
 					// A team member may only have access to part of the repository.
 					skipped = append(skipped, file)
 					continue
@@ -134,9 +134,19 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 				return nil, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 			}
 		}
+		if edit != nil {
+			before := plaintext
+			plaintext, err = editPlaintext(file.Path, plaintext, edit)
+			if err != nil {
+				return nil, fmt.Errorf("%w; %s was not changed", err, file.Path)
+			}
+			if bytes.Equal(before, plaintext) {
+				continue
+			}
+		}
 		var encrypted []byte
 		if inGit && !noReuse && !external {
-			encrypted = reusableCiphertext(root, path, ruleFiles, original, identities)
+			encrypted = reusableCiphertext(root, path, ruleFiles, plaintext, identities)
 		}
 		if encrypted == nil {
 			var output bytes.Buffer

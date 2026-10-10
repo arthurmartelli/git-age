@@ -7,25 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newEditCommand() *cobra.Command {
-	var options struct {
-		Recipients []string
-		Identities []string
-	}
-
-	edit := &cobra.Command{
-		Use:   "edit FILE",
-		Short: "edit a protected file decrypted, then encrypt it again",
-		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
-	}
-
-	recipientFlags(edit.Flags(), &options.Recipients)
-	identityFlags(edit.Flags(), &options.Identities)
-
-	return edit
-}
-
 func newInstallCommand() *cobra.Command {
 	var options struct {
 		Mode              string
