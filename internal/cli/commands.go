@@ -112,18 +112,6 @@ func newAuditCommand() *cobra.Command {
 	return audit
 }
 
-func newCleanCommand() *cobra.Command {
-	clean := &cobra.Command{
-		Use:    "clean FILE",
-		Short:  "reuse unchanged ciphertext; Git clean filter entrypoint",
-		Hidden: true,
-		Args:   cobra.ExactArgs(1),
-		RunE:   notImplemented,
-	}
-
-	return clean
-}
-
 func newMergeCommand() *cobra.Command {
 	var options struct {
 		Path       string

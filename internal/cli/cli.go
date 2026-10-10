@@ -73,7 +73,7 @@ func newRootCommand() *cobra.Command {
 		newAuditCommand(),
 		newCompletionCommand(),
 		newTextconvCommand(&options),
-		newCleanCommand(),
+		newCleanCommand(&options),
 		newMergeCommand(),
 		newHookCommand(),
 	)
