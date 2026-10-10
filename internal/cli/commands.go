@@ -7,27 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newLockCommand() *cobra.Command {
-	var options struct {
-		Recipients []string
-		Identities []string
-		NoReuse    bool
-	}
-
-	lock := &cobra.Command{
-		Use:   "lock [PATH ...]",
-		Short: "encrypt protected working-tree files",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  notImplemented,
-	}
-
-	recipientFlags(lock.Flags(), &options.Recipients)
-	identityFlags(lock.Flags(), &options.Identities)
-	lock.Flags().BoolVar(&options.NoReuse, "no-reuse", false, "always encrypt freshly instead of reusing unchanged ciphertext")
-
-	return lock
-}
-
 func newRekeyCommand() *cobra.Command {
 	var options struct {
 		Recipients []string

@@ -191,13 +191,18 @@ func regularFiles(directory string, inGit bool) ([]string, error) {
 }
 
 func filePatterns(path string, content []byte) ([]byte, error) {
+	patterns, _, err := parseRules(path, content)
+	return patterns, err
+}
+
+func parseRules(path string, content []byte) ([]byte, []string, error) {
 	if !utf8.Valid(content) {
-		return nil, fmt.Errorf("%s: .gitage must be UTF-8 text", path)
+		return nil, nil, fmt.Errorf("%s: .gitage must be UTF-8 text", path)
 	}
 	lines := strings.Split(string(content), "\n")
 	section := ""
 	seen := map[string]bool{}
-	recipients := 0
+	var recipients []string
 	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -207,10 +212,10 @@ func filePatterns(path string, content []byte) ([]byte, error) {
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			section = line[1 : len(line)-1]
 			if section != "files" && section != "recipients" {
-				return nil, fmt.Errorf("%s:%d: unknown section [%s]", path, i+1, section)
+				return nil, nil, fmt.Errorf("%s:%d: unknown section [%s]", path, i+1, section)
 			}
 			if seen[section] {
-				return nil, fmt.Errorf("%s:%d: duplicate section [%s]", path, i+1, section)
+				return nil, nil, fmt.Errorf("%s:%d: duplicate section [%s]", path, i+1, section)
 			}
 			seen[section] = true
 			lines[i] = ""
@@ -219,22 +224,22 @@ func filePatterns(path string, content []byte) ([]byte, error) {
 		switch section {
 		case "files":
 			if line == "!" {
-				return nil, fmt.Errorf("%s:%d: empty negation rule", path, i+1)
+				return nil, nil, fmt.Errorf("%s:%d: empty negation rule", path, i+1)
 			}
 		case "recipients":
 			if !strings.HasPrefix(line, "age1") && !strings.HasPrefix(line, "ssh-") {
-				return nil, fmt.Errorf("%s:%d: not an age recipient or SSH public key", path, i+1)
+				return nil, nil, fmt.Errorf("%s:%d: not an age recipient or SSH public key", path, i+1)
 			}
-			recipients++
+			recipients = append(recipients, line)
 			lines[i] = ""
 		default:
-			return nil, fmt.Errorf("%s:%d: entry is outside a section; start with [files]", path, i+1)
+			return nil, nil, fmt.Errorf("%s:%d: entry is outside a section; start with [files]", path, i+1)
 		}
 	}
-	if seen["recipients"] && recipients == 0 {
-		return nil, fmt.Errorf("%s: [recipients] section is empty", path)
+	if seen["recipients"] && len(recipients) == 0 {
+		return nil, nil, fmt.Errorf("%s: [recipients] section is empty", path)
 	}
-	return []byte(strings.Join(lines, "\n")), nil
+	return []byte(strings.Join(lines, "\n")), recipients, nil
 }
 
 func fileState(path string) string {
