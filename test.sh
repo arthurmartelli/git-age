@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# git-age-test.sh: end-to-end test for git-age.
+# test.sh: end-to-end test for git-age.
 #
 # Builds a throwaway repository with two protected files, walks through a
 # normal team workflow, then checks that the main failure cases are refused.
 #
 # Usage:
-#   git-age-test.sh            # test the git-age next to this script
-#   GIT_AGE=/path/to/git-age git-age-test.sh
-#   KEEP=1 git-age-test.sh     # keep the temporary directory for inspection
+#   test.sh            # build and test the Go binary
+#   GIT_AGE=/path/to/git-age test.sh
+#   KEEP=1 test.sh     # keep the temporary directory for inspection
 #
-# Requires: git, age, age-keygen, python3. Runs on Linux, macOS and Windows
-# (Git Bash).
+# Requires: git, age, age-keygen, perl, and Go unless GIT_AGE is set.
+# Runs on Linux, macOS and Windows (Git Bash).
 
 set -euo pipefail
 
@@ -21,20 +21,25 @@ case $(uname -s) in
   *) platform=linux ;;
 esac
 
-GIT_AGE=${GIT_AGE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-age}
-for tool in git age age-keygen; do
+for tool in git age age-keygen perl; do
   command -v "$tool" >/dev/null || { echo "missing dependency: $tool" >&2; exit 2; }
 done
+if [[ -z ${GIT_AGE:-} ]]; then
+  command -v go >/dev/null || { echo "missing dependency: go" >&2; exit 2; }
+  project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  GIT_AGE=$project_dir/bin/git-age
+  [[ $platform != windows ]] || GIT_AGE+=.exe
+  (cd "$project_dir" && CGO_ENABLED=0 go build -trimpath -o "$GIT_AGE" ./cmd/git-age)
+fi
+[[ $platform == windows ]] || command -v script >/dev/null || { echo "missing dependency: script" >&2; exit 2; }
 [[ -x $GIT_AGE ]] || { echo "git-age not found or not executable: $GIT_AGE" >&2; exit 2; }
-
-# --- isolated environment ----------------------------------------------------
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/git-age-test.XXXXXX")
 if [[ ${KEEP:-0} == 1 ]]; then trap 'echo "kept: $tmp"' EXIT; else trap 'rm -rf "$tmp"' EXIT; fi
-# git-age's temporary files land here too, where the test can look for them.
+# Include git-age's temporary files in leak checks.
 export TMPDIR=$tmp
 
-# Never touch the user's keys, config or hooks.
+# Keep the user's keys, config and hooks out of the tests.
 unset GIT_AGE_KEY_FILE GIT_AGE_RECIPIENT GIT_AGE_HOOK_MODE GIT_AGE_UNLOCK_AFTER_COMMIT \
   GIT_AGE_ALLOW_PRIVATE_KEYS GIT_AGE_ALLOW_STALE_RECIPIENTS GIT_AGE_ALLOW_EMPTY \
   GIT_AGE_ALLOW_REMOVE GIT_AGE_ALLOW_PLAINTEXT_PUSH GIT_EDITOR VISUAL
@@ -42,37 +47,26 @@ export GIT_CONFIG_GLOBAL=$tmp/gitconfig GIT_CONFIG_NOSYSTEM=1
 printf '[user]\nname = git-age test\nemail = test@example.invalid\n[init]\ndefaultBranch = main\n' \
   >"$GIT_CONFIG_GLOBAL"
 
-# The test runs `git-age`, and hooks `git age`: put the one under test first.
+# Hooks invoke `git age`, which must resolve to the binary under test.
 mkdir -p "$tmp/bin" "$tmp/keys"
 ln -s "$GIT_AGE" "$tmp/bin/git-age"
 export PATH=$tmp/bin:$PATH
-# Python for Windows calls python3 python.
-if ! command -v python3 >/dev/null && command -v python >/dev/null; then
-  printf '#!/bin/sh\nexec python "$@"\n' >"$tmp/bin/python3" && chmod +x "$tmp/bin/python3"
-fi
-command -v python3 >/dev/null || { echo "missing dependency: python3" >&2; exit 2; }
 
 for name in alice bob carol dave; do
   age-keygen -o "$tmp/keys/$name" 2>/dev/null
   printf -v "$name" '%s' "$(age-keygen -y "$tmp/keys/$name")"
 done
 
-# --- helpers -------------------------------------------------------------------
-
 passed=0 failed=0
 section() { printf '\n== %s\n' "$*"; }
 skip() { printf '  skip  %s\n' "$*"; }
 
-# check DESCRIPTION COMMAND... | check DESCRIPTION 'CONDITION': it must succeed.
-# refuse DESCRIPTION TEXT COMMAND...: it must fail and print TEXT.
-# warns DESCRIPTION TEXT COMMAND...: it must succeed and print TEXT.
-# A single argument is evaluated as shell code, without pipefail so that
-# `cmd | grep -q` cannot fail on SIGPIPE.
 check() { _expect 0 "$1" "" "${@:2}"; }
 refuse() { _expect 1 "$@"; }
 warns() { _expect 0 "$@"; }
 _expect() {
   local want=$1 description=$2 text=$3 output status=0; shift 3
+  # `grep -q` can close a pipe early; SIGPIPE must not fail the assertion.
   output=$(set +o pipefail; if (($# == 1)); then eval "$1"; else "$@"; fi 2>&1 </dev/null) || status=$?
   if (((status != 0) == want)) && grep -qF -- "$text" <<<"$output"; then
     passed=$((passed + 1)); printf '  ok    %s\n' "$description"
@@ -84,70 +78,58 @@ _expect() {
 
 not() { ! "$@"; }
 commit() { git commit -q -m "$1" </dev/null; }
-# commit_unchecked MESSAGE: commit what is staged, skipping the hooks.
 commit_unchecked() { git commit -q --no-verify -m "$1" </dev/null; }
 clean_tree() { [[ -z $(git status --porcelain) ]]; }
 lock() { git-age lock "$@" >/dev/null; }
 unlock() { git-age unlock "$@" >/dev/null; }
 as() { local who=$1; shift; GIT_AGE_KEY_FILE=$tmp/keys/$who git-age "$@"; }
-mode_is() { [[ $(python3 -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o7777)[2:])' "$1") == "$2" ]]; }
-# drop_carol: remove carol's entry from .gitage.
+mode_is() { [[ $(perl -e 'printf "%o", (stat $ARGV[0])[2] & 07777' "$1") == "$2" ]]; }
 drop_carol() { grep -v -e '^# Carol$' -e "^$carol\$" .gitage >.gitage.new && mv .gitage.new .gitage; }
 
-# gitage [RECIPIENT...]: a .gitage protecting *.env for RECIPIENTs.
 gitage() {
   printf '[files]\n*.env\n'
   if (($#)); then printf '\n[recipients]\n'; printf '%s\n' "$@"; fi
 }
-# new_repo NAME [RECIPIENT...]: enter a new repository that uses alice's key
-# and protects *.env for RECIPIENTs.
 new_repo() {
   mkdir -p "$tmp/$1" && cd "$tmp/$1" && git init -q && git config age.keyFile "$tmp/keys/alice"
   shift
   gitage "$@" >.gitage
 }
 
-# is_locked FILE...: every FILE is age ciphertext; staged_is_locked: as staged.
 is_locked() { local f; for f; do head -c 21 "$f" | grep -q '^age-encryption.org/v1' || return 1; done; }
 staged_is_locked() { git show ":$1" | head -c 21 | grep -q '^age-encryption.org/v1'; }
-# decrypts_as WHO FILE CONTENT, head_decrypts_as WHO PATH CONTENT: WHO's key
-# decrypts FILE, or PATH as committed, to CONTENT.
 decrypts_as() { [[ $(age -d -i "$tmp/keys/$1" "$2" 2>/dev/null) == "$3" ]]; }
 head_decrypts_as() { [[ $(git show "HEAD:$2" | age -d -i "$tmp/keys/$1" 2>/dev/null) == "$3" ]]; }
-# status_is [ARGS...] -- RECORD...: `git-age ARGS... status --porcelain` prints these.
 status_is() {
   local args=()
   while [[ $1 != -- ]]; do args+=("$1"); shift; done
   shift
   [[ $(git-age "${args[@]}" status --porcelain 2>/dev/null) == "$(printf '%s\n' "$@")" ]]
 }
-# stage_plaintext FILE...: stage FILE's bytes as they are, bypassing Git's filters.
+# Hook tests need staged plaintext even when clean filters are installed.
 stage_plaintext() {
   local f
   for f; do git update-index --add --cacheinfo "100644,$(git hash-object -w --no-filters "$f"),$f"; done
 }
-# forget_stat FILE...: make Git compare FILE by content, as once it changes.
+# Git's stat cache can hide plaintext changes from status.
 forget_stat() { git ls-files -s "$@" | git update-index --index-info; }
-# file_list: every path in the working tree, to compare.
 file_list() { find . -path ./.git -prune -o -print | LC_ALL=C sort; }
 
-# on_terminal COMMAND: run COMMAND on a pseudo-terminal, typing stdin into it.
-# Read all its output: if the reader stops early, COMMAND hangs.
+# Callers must drain the output or the pseudo-terminal can hang.
 on_terminal() {
-  python3 -c 'import os, pty, sys; sys.exit(os.waitstatus_to_exitcode(pty.spawn(["sh", "-c", sys.argv[1]])))' "$1"
-}
-# without_terminal COMMAND...: run COMMAND without a controlling terminal,
-# which native Windows programs never have.
-without_terminal() {
-  if [[ $platform == windows ]]; then "$@"
-  elif command -v setsid >/dev/null; then setsid -w "$@"
-  else python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+  if [[ $platform == macos ]]; then
+    script -q /dev/null sh -c "$1"
+  else
+    SHELL=/bin/sh script -q -e -c "$1" /dev/null
   fi
 }
-# answer REPLIES MESSAGE: commit on a terminal, answering the hook's prompt.
+# Native Windows programs have no controlling terminal.
+without_terminal() {
+  if [[ $platform == windows ]]; then "$@"
+  else perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- "$@"
+  fi
+}
 answer() { printf '%b' "$1" | on_terminal "git commit -q -m '$2'"; }
-
-# --- a team workflow -----------------------------------------------------------
 
 section "lock, unlock and status"
 
@@ -167,7 +149,7 @@ check "lock encrypts them to the recipients only" \
 check "unlock restores the plaintext" 'git-age unlock && grep -qx API_TOKEN=s3cr3t secret.env'
 
 files=$(file_list)
-# root and Windows read files whatever their mode.
+# Root and Windows can read files despite mode 000.
 if [[ $platform != windows && $(id -u) -ne 0 ]]; then
   chmod 000 secret.env
   refuse "lock fails on an unreadable file" secret.env git-age lock
@@ -187,20 +169,18 @@ unlock
 
 section "lock and unlock keep file metadata"
 
-# set_metadata gives secret.env a mode, an ACL and an extended attribute, or
-# their Windows equivalents, credentials.yaml a mode, and config/ an ACL that
-# new files inherit; metadata_kept checks that all of it survived, and no more.
+# Inherited ACLs expose replacements that accidentally grant new permissions.
 case $platform in
   linux)
     has_acl() { getfacl -cn "$2" 2>/dev/null | grep -q "^$1"; }
     set_metadata() {
       command -v setfacl >/dev/null && setfacl -m u:65534:r secret.env 2>/dev/null &&
-        python3 -c 'import os; os.setxattr("secret.env", "user.test", b"kept")' 2>/dev/null &&
+        setfattr -n user.test -v kept secret.env 2>/dev/null &&
         chmod 640 secret.env && chmod 600 config/credentials.yaml && setfacl -d -m u:65534:rw config
     }
     metadata_kept() {
       mode_is secret.env 640 && mode_is config/credentials.yaml 600 && has_acl user:65534:r-- secret.env &&
-        [[ $(python3 -c 'import os; print(os.getxattr("secret.env", "user.test").decode())') == kept ]] &&
+        [[ $(getfattr --only-values -n user.test secret.env) == kept ]] &&
         not has_acl user:65534: config/credentials.yaml
     }
     ;;
@@ -221,13 +201,12 @@ case $platform in
     icacls() { MSYS2_ARG_CONV_EXCL='*' command icacls "$@"; }
     set_metadata() {
       icacls secret.env /grant '*S-1-1-0:(R)' >/dev/null &&
-        python3 -c 'open("secret.env:test", "w").write("kept")' && attrib +R +H secret.env
+        powershell -NoProfile -NonInteractive -Command 'Set-Content -LiteralPath secret.env -Stream test -Value kept -NoNewline -ErrorAction Stop' && attrib +R +H secret.env
     }
     metadata_kept() {
-      python3 -c 'import os, stat, sys; a = os.stat("secret.env").st_file_attributes
-sys.exit(not (a & stat.FILE_ATTRIBUTE_READONLY and a & stat.FILE_ATTRIBUTE_HIDDEN))' &&
+      powershell -NoProfile -NonInteractive -Command '$a = [IO.File]::GetAttributes("secret.env"); if (-not ($a.HasFlag([IO.FileAttributes]::ReadOnly) -and $a.HasFlag([IO.FileAttributes]::Hidden))) { exit 1 }' &&
         icacls secret.env | grep -qF "Everyone:(R)" &&
-        [[ $(python3 -c 'print(open("secret.env:test").read())') == kept ]]
+        [[ $(powershell -NoProfile -NonInteractive -Command 'Get-Content -LiteralPath secret.env -Stream test -Raw -Force -ErrorAction Stop') == kept ]]
     }
     ;;
 esac
@@ -238,7 +217,7 @@ if set_metadata; then
 else
   skip "no ACL or extended attribute support here"
 fi
-# Fresh copies drop the metadata.
+# Remove test metadata so later cases start with default permissions.
 [[ $platform != windows ]] || attrib -R -H secret.env
 rm -rf secret.env config && mkdir config && cp "$tmp/secret.env" . && cp "$tmp/credentials.yaml" config/
 
@@ -321,8 +300,6 @@ drop_carol
 warns "lock warns when your identity is not a recipient" "is not among the recipients" \
   git-age lock -i "$tmp/keys/carol"
 git checkout -q -- .gitage
-
-# --- where rules and keys come from --------------------------------------------
 
 section "subdirectories, nested .gitage and other key sources"
 
@@ -448,11 +425,8 @@ else
   skip "interactive prompts (no terminal on Windows)"
 fi
 
-# --- per-directory recipients and trust ---------------------------------------
-
 section "per-directory recipients"
 
-# alice reads everything; carol, and later dave, only prod/.
 new_repo repo-scoped "$alice"
 mkdir prod && echo app >app.env && echo db >prod/db.env
 printf '[recipients]\n# Carol\n%s\n' "$carol" >prod/.gitage
@@ -492,7 +466,7 @@ refuse "someone listed nowhere gets an error" "cannot decrypt" as dave unlock
 
 section "recipient trust"
 
-# Mallory, who can push, adds keys behind everyone's back; bob's key stands in for hers.
+# Bob's key represents an attacker who can push recipient changes.
 mallory() { git -c user.name=Mallory -c user.email=mallory@example.invalid "$@"; }
 
 cd "$tmp/repo-scoped"
@@ -521,17 +495,13 @@ git add .gitage && mallory commit -q --no-verify -m "sneak a key in"
 git checkout -q main
 warns "post-merge warns when a merge changes [recipients]" "this merge changes [recipients]" git merge -q mallory
 
-# --- merges -----------------------------------------------------------------------
-
 section "merge driver"
 
 new_repo repo-merge "$alice" "$bob"
 printf 'A=1\nB=1\nC=1\n' >app.env
 git-age install --mode=always-lock >/dev/null
 git add -A && commit base && lock
-# edit BRANCH CONTENT: commit an encrypted edit of app.env on BRANCH.
 edit() { git checkout -q "$1" && printf "$2" >app.env && git add app.env && commit "$1" 2>/dev/null && lock; }
-# diverge BRANCH OURS THEIRS: branch off main, and edit both sides.
 diverge() { git branch "$1" main && edit "$1" "$3" && edit main "$2"; }
 
 diverge side 'A=1\nB=1\nC=2\n' 'A=2\nB=1\nC=1\n'
@@ -592,8 +562,6 @@ printf '#!/bin/sh\n' >"$hooks/post-checkout"
 check "it leaves a hook it does not own alone" \
   'git-age install --mode=always-lock --no-diff --no-merge --no-filter && [[ -e $hooks/post-checkout ]]'
 
-# --- history -----------------------------------------------------------------------
-
 section "audit"
 
 new_repo history && rm .gitage
@@ -641,7 +609,6 @@ git update-ref refs/remotes/origin/main "$before"
 refuse "remote-tracking refs keep the old history" early.env git-age audit
 check "which audit -- --branches --tags leaves out" git-age audit -- --branches --tags
 git update-ref -d refs/remotes/origin/main
-# every_version WHO can|cannot: WHO can (or cannot) decrypt every .env in history.
 every_version() {
   local commit path
   for commit in $(git rev-list --exclude='refs/git-age/*' --all); do
@@ -739,7 +706,6 @@ refuse "the .gitage removal refusal suggests uninstall" "git-age uninstall" git 
 git restore --staged --worktree -- .gitage
 hooks=$(git rev-parse --git-path hooks)
 printf '#!/bin/sh\n' >"$hooks/post-rewrite" && chmod +x "$hooks/post-rewrite"
-# installed: the hooks are in place, and Git decrypts diffs.
 installed() {
   [[ -x $hooks/pre-commit && -x $hooks/pre-push ]] && git config age.hookMode >/dev/null &&
     git cat-file --textconv HEAD:app.env | grep -q TOKEN=
@@ -754,8 +720,6 @@ check "removing its own hooks, config and readable diffs, keeping age.keyFile an
 check "a second uninstall has nothing to do" 'git-age uninstall | grep -qx "git-age: nothing to uninstall"'
 rm "$hooks/post-rewrite"
 check "install puts it all back" 'git-age install --mode=always-lock && installed'
-
-# --- commands --------------------------------------------------------------------
 
 section "path arguments"
 
@@ -785,18 +749,15 @@ check "the refusals changed nothing" status_is -- 'L. a.env' 'L. sub/b.env' 'U. 
 section "edit"
 
 lock && git add -A && commit secrets
-# The editor records whether anyone else could read the file it got, and
-# what Git saw in the working tree meanwhile, then appends a line.
+# Record permissions and Git status to catch plaintext exposure during editing.
 cat >"$tmp/append-editor" <<'EOF'
 #!/bin/sh
-python3 -c 'import os, sys
-print(any(os.stat(p).st_mode & 0o077 == 0 for p in (sys.argv[1], os.path.dirname(sys.argv[1]))))' "$1" >"${0%/*}/edit-private"
+perl -MFile::Basename=dirname -e 'print((grep { ((stat $_)[2] & 077) == 0 } ($ARGV[0], dirname($ARGV[0]))) ? "True\n" : "False\n")' "$1" >"${0%/*}/edit-private"
 git status --porcelain --untracked-files=all >"${0%/*}/edit-status"
 printf 'NEW=1\n' >>"$1"
 EOF
 printf '#!/bin/sh\nprintf "NEW=1\\n" >>"$1"\nexit 1\n' >"$tmp/failing-editor"
 chmod +x "$tmp/append-editor" "$tmp/failing-editor"
-# no_plaintext_left: no decrypted copy of a.env is anywhere in the test's files.
 no_plaintext_left() { ! grep -rqF a-plaintext "$tmp"; }
 cp a.env "$tmp/a.env.before"
 
@@ -820,25 +781,12 @@ unlock sub/c.env
 warns "edit opens an unlocked file in place" "sub/c.env is unlocked" env EDITOR="$tmp/append-editor" git-age edit sub/c.env
 check "where it stays plaintext, edited" '[[ $(cat sub/c.env) == $'"'"'c\nNEW=1'"'"' ]]'
 
-section "help and completion"
-
-check "help prints the manual, anywhere, without a key; --help points to it" \
-  'out=$(git-age -C "$tmp" help) && grep -qx "QUICK START" <<<"$out" && grep -qx "SHELL COMPLETION" <<<"$out" &&
-   git-age --help | grep -qF "git-age help"'
-check "help TOPIC prints one section, found by a word or a prefix, in any case; help COMMAND its options" \
-  'out=$(git-age help hooks) && [[ $(head -1 <<<"$out") == "GIT HOOKS" ]] && ! grep -qx KEYS <<<"$out" &&
-   [[ $(git-age help trust | head -1) == "RECIPIENT TRUST" && $(git-age help INTEG | head -1) == "GIT INTEGRATION" &&
-      $(git-age help .gitage | head -1) == .GITAGE ]] && git-age help lock | grep -q "^usage: git-age lock"'
-refuse "an unknown topic lists the topics" "topics are: quick-start, everyday-use, commands" git-age help nonsense
-[[ $platform == windows ]] || check "on a terminal, the manual goes through Git's pager" \
-  'GIT_PAGER="sed s/^/paged:/" on_terminal "git-age help" | tr -d "\r" | grep -x "paged:QUICK START" >/dev/null'
-check "otherwise it is printed plainly" 'GIT_PAGER="sed s/^/paged:/" git-age help | grep -qx "QUICK START"'
+section "completion"
 
 check "the bash completion script parses" 'bash -n <(git-age completion bash)'
 ! command -v zsh >/dev/null || check "so does zsh's" 'git-age completion zsh | zsh -n'
 ! command -v fish >/dev/null || check "so does fish's" 'git-age completion fish | fish --no-config -n'
 refuse "an unknown shell is refused" "invalid choice: 'tcsh'" git-age completion tcsh
-# bash_complete WORD...: what bash completes for the last WORD, as `git-age` or `git age`.
 bash_complete() {
   bash -c 'source <(git-age completion bash)
     COMP_WORDS=("$@") COMP_CWORD=$(($# - 1)) words=("$@") cword=$(($# - 1)) __git_cmd_idx=1
@@ -846,7 +794,6 @@ bash_complete() {
     printf "%s\n" "${COMPREPLY[@]}"' bash "$@"
 }
 completes() { [[ $(bash_complete "${@:2}") == "$1" ]]; }
-# offers_documented COMPLETIONS: they include lock, and only commands the manual lists.
 manual=$(git-age help commands)
 offers_documented() {
   local command

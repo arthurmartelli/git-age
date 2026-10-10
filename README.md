@@ -4,18 +4,17 @@
 
 Keep secrets in Git, encrypted with [age](https://github.com/FiloSottile/age).
 
-A `.gitage` file defines which files are protected and who can decrypt them.
-Private keys stay outside the repository. git-age is a single Python script
-with no dependencies beyond Python, Git and age.
+A `.gitage` file defines which files are protected and who can decrypt them. Private keys stay outside the repository. git-age is a single Go executable with age built in. Git is its only runtime dependency.
 
 ## Install
 
-Requires Python 3.9+, Git, `age` and `age-keygen`.
+Requires Git. Install with Go 1.25+:
 
 ```sh
-curl -fsSLo ~/.local/bin/git-age https://raw.githubusercontent.com/arthurmartelli/git-age/main/git-age
-chmod +x ~/.local/bin/git-age
+CGO_ENABLED=0 go install github.com/arthurmartelli/git-age/cmd/git-age@latest
 ```
+
+Go installs the executable in `GOBIN`, or `$(go env GOPATH)/bin` by default. Add that directory to your `PATH`.
 
 With `git-age` on your `PATH`, Git also runs it as `git age`.
 
@@ -58,10 +57,7 @@ git config age.keyFile ~/.config/git-age/myrepo.key
 
 ## Teams
 
-git-age supports sharing secrets with a team. Each member keeps their own
-private key outside the repository, and their public recipient is committed to
-`[recipients]` in `.gitage`. Nested `.gitage` files can grant a member access
-to only part of the repository.
+git-age supports sharing secrets with a team. Each member keeps their own private key outside the repository, and their public recipient is committed to `[recipients]` in `.gitage`. Nested `.gitage` files can grant a member access to only part of the repository.
 
 Adding and removing members, and limiting access, are covered in the manual:
 
@@ -84,11 +80,13 @@ Shell completion for bash, zsh and fish: `git-age completion SHELL`.
 ## Tests
 
 ```sh
-./git-age-test.sh
+go test ./...
+./test.sh
 ```
 
-The end-to-end test builds throwaway repositories in a temporary directory and
-never touches your keys, config or hooks.
+Go tests cover migrated command handlers directly and verify that the Linux binary is static. The shell script builds the Go binary and runs the end-to-end tests in throwaway repositories. It never touches your keys, config or hooks.
+
+Tests require Go 1.25+, Bash, Git, `age`, `age-keygen` and Perl. Set `GIT_AGE=/absolute/path/to/git-age` to test an existing executable without rebuilding.
 
 ## License
 
