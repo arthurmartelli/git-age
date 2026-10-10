@@ -7,25 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newKeygenCommand() *cobra.Command {
-	var options struct {
-		Output    string
-		NoExclude bool
-	}
-
-	keygen := &cobra.Command{
-		Use:   "keygen",
-		Short: "generate a new age identity",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
-	}
-
-	keygen.Flags().StringVarP(&options.Output, "output", "o", "", "identity output path (default: .gitage.key at the repository root)")
-	keygen.Flags().BoolVar(&options.NoExclude, "no-exclude", false, "do not add the new key to .git/info/exclude")
-
-	return keygen
-}
-
 func newLockCommand() *cobra.Command {
 	var options struct {
 		Recipients []string
