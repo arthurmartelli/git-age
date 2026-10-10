@@ -178,17 +178,6 @@ func newCompletionCommand() *cobra.Command {
 	return completion
 }
 
-func newTextconvCommand() *cobra.Command {
-	textconv := &cobra.Command{
-		Use:   "textconv FILE",
-		Short: "print a file decrypted; Git diff driver entrypoint",
-		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
-	}
-
-	return textconv
-}
-
 func newCleanCommand() *cobra.Command {
 	clean := &cobra.Command{
 		Use:   "clean FILE",

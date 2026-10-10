@@ -55,19 +55,23 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 		if err != nil {
 			return err
 		}
-		var input io.Reader = bytes.NewReader(original)
-		if bytes.HasPrefix(original, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
-			input = armor.NewReader(input)
-		}
-		reader, err := age.Decrypt(input, identities...)
-		if err != nil {
-			return fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
-		}
-		plaintext, err := io.ReadAll(reader)
+		plaintext, err := decryptContent(original, identities)
 		if err != nil {
 			return fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 		}
 		replacements = append(replacements, replacement{path, original, plaintext})
 	}
 	return replaceFiles(replacements)
+}
+
+func decryptContent(content []byte, identities []age.Identity) ([]byte, error) {
+	var input io.Reader = bytes.NewReader(content)
+	if bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
+		input = armor.NewReader(input)
+	}
+	reader, err := age.Decrypt(input, identities...)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(reader)
 }
