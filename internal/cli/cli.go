@@ -18,6 +18,9 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	root.SetArgs(args)
 
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, errCheckFailed) {
+			return 1
+		}
 		if errors.Is(err, ErrNotImplemented) {
 			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1

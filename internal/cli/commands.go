@@ -45,23 +45,6 @@ func newEditCommand() *cobra.Command {
 	return edit
 }
 
-func newCheckCommand() *cobra.Command {
-	var options struct {
-		Cached bool
-	}
-
-	check := &cobra.Command{
-		Use:   "check",
-		Short: "fail if protected files are plaintext",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
-	}
-
-	check.Flags().BoolVar(&options.Cached, "cached", false, "check staged files using the staged .gitage rules")
-
-	return check
-}
-
 func newInstallCommand() *cobra.Command {
 	var options struct {
 		Mode              string
