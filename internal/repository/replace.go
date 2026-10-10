@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 )
 
 type replacement struct {
@@ -44,7 +45,22 @@ func replaceFiles(replacements []replacement) error {
 	return nil
 }
 
-func writeExisting(path string, content []byte) error {
+func writeExisting(path string, content []byte) (err error) {
+	if runtime.GOOS == "windows" {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode().Perm()&0200 == 0 {
+			// On Windows, Chmod changes only the read-only attribute.
+			if err := os.Chmod(path, info.Mode()|0200); err != nil {
+				return err
+			}
+			defer func() {
+				err = errors.Join(err, os.Chmod(path, info.Mode()))
+			}()
+		}
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return err

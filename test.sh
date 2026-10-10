@@ -226,12 +226,12 @@ case $platform in
     icacls() { MSYS2_ARG_CONV_EXCL='*' command icacls "$@"; }
     set_metadata() {
       icacls secret.env /grant '*S-1-1-0:(R)' >/dev/null &&
-        powershell -NoProfile -NonInteractive -Command '[IO.File]::WriteAllText("secret.env:test", "kept")' && attrib +R +H secret.env
+        powershell -NoProfile -NonInteractive -Command 'Set-Content -LiteralPath secret.env -Stream test -Value kept -NoNewline -ErrorAction Stop' && attrib +R +H secret.env
     }
     metadata_kept() {
       powershell -NoProfile -NonInteractive -Command '$a = [IO.File]::GetAttributes("secret.env"); if (-not ($a.HasFlag([IO.FileAttributes]::ReadOnly) -and $a.HasFlag([IO.FileAttributes]::Hidden))) { exit 1 }' &&
         icacls secret.env | grep -qF "Everyone:(R)" &&
-        [[ $(powershell -NoProfile -NonInteractive -Command '[Console]::Write([IO.File]::ReadAllText("secret.env:test"))') == kept ]]
+        [[ $(powershell -NoProfile -NonInteractive -Command 'Get-Content -LiteralPath secret.env -Stream test -Raw -Force -ErrorAction Stop') == kept ]]
     }
     ;;
 esac

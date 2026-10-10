@@ -61,12 +61,12 @@ jobs:
           echo "$AGE_SHA256  age.zip" | sha256sum -c -
           unzip -q age.zip
           echo "$RUNNER_TEMP\\age" >>"$GITHUB_PATH"
+      - name: Vet
+        run: go vet ./...
       - name: Go tests
         run: go test ./...
       - name: Test
         run: ./test.sh
-      - name: Vet
-        run: go vet ./...
 
   # The one check the main branch ruleset requires, whatever the matrix.
   tests:
