@@ -77,7 +77,12 @@ COMMANDS
         Decrypt protected files.
 
     rekey [PATH...]
-        Re-encrypt protected files for the current recipients.
+	Encrypt protected plaintext and freshly re-encrypt locked files
+	for the current recipients. Existing ciphertext is never reused.
+
+	Decrypted contents stay in memory. Files outside your configured
+	access are skipped with a warning. Other decryption failures
+	abort the operation before any file is changed.
 
     edit FILE
         Edit a protected file in your editor. A locked file is decrypted

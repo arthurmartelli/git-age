@@ -62,7 +62,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(
 		newKeygenCommand(&options),
 		newLockCommand(&options),
-		newRekeyCommand(),
+		newRekeyCommand(&options),
 		newUnlockCommand(&options),
 		newEditCommand(),
 		newStatusCommand(&options),

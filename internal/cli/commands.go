@@ -7,25 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRekeyCommand() *cobra.Command {
-	var options struct {
-		Recipients []string
-		Identities []string
-	}
-
-	rekey := &cobra.Command{
-		Use:   "rekey [PATH ...]",
-		Short: "re-encrypt every protected file to the current recipients",
-		Args:  cobra.ArbitraryArgs,
-		RunE:  notImplemented,
-	}
-
-	recipientFlags(rekey.Flags(), &options.Recipients)
-	identityFlags(rekey.Flags(), &options.Identities)
-
-	return rekey
-}
-
 func newEditCommand() *cobra.Command {
 	var options struct {
 		Recipients []string

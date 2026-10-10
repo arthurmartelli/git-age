@@ -9,8 +9,6 @@ import (
 	"strings"
 )
 
-// Textconv displays a blob without changing it. Decryption failures become
-// placeholders so Git can finish the diff and still show ciphertext changes.
 func Textconv(directory, path string) ([]byte, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(directory, path)
@@ -23,6 +21,7 @@ func Textconv(directory, path string) ([]byte, error) {
 	if bytes.HasPrefix(content, []byte("age-encryption.org/v1\n")) || bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----\n")) {
 		plaintext, err := textconvDecrypt(directory, content)
 		if err != nil {
+			// Git must still show ciphertext changes when decryption fails.
 			reason := strings.SplitN(err.Error(), "\n", 2)[0]
 			return []byte(fmt.Sprintf("[git-age: encrypted, %s; sha256 %x]\n", reason, sha256.Sum256(content))), nil
 		}

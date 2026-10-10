@@ -15,10 +15,9 @@ type IndexCheck struct {
 	PrivateKeys  []string
 }
 
-// CheckIndex reads staged rules and changed regular blobs without checking them out.
-// Paths are relative to the Git root, even when invoked from a subdirectory.
 func CheckIndex(directory string) (IndexCheck, error) {
 	var result IndexCheck
+	// Use the Git root because staged paths are repository-relative.
 	root, err := gitRoot(directory)
 	if err != nil {
 		return result, err
@@ -55,7 +54,7 @@ func CheckIndex(directory string) (IndexCheck, error) {
 		}
 	}
 
-	// Disabling rename detection makes a moved rule file count as a removal.
+	// Moving a rule file can unprotect files, so it must count as a removal.
 	output, err = git("diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z", "--diff-filter=DT")
 	if err != nil {
 		return result, err

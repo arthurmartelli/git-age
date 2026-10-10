@@ -23,8 +23,6 @@ type ProtectedFile struct {
 	Pattern  string
 }
 
-// ProtectedFiles reads .gitage rules and returns regular files relative to directory.
-// Git evaluates the patterns in an isolated worktree so status never changes the repository.
 func ProtectedFiles(directory string, paths []string) ([]ProtectedFile, error) {
 	directory, err := filepath.Abs(directory)
 	if err != nil {
@@ -98,8 +96,8 @@ func ruleIgnoreCase(root string, inGit bool) string {
 	return "false"
 }
 
-// matchProtectedFiles matches paths only. Callers read state from the worktree or index.
 func matchProtectedFiles(directory, root string, candidates []string, rules map[string][]byte, ignoreCase string) ([]ProtectedFile, error) {
+	// A scratch repository keeps rule matching from changing the user's ignore rules or index.
 	scratch, err := os.MkdirTemp("", "git-age-rules-")
 	if err != nil {
 		return nil, err

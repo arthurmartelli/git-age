@@ -14,32 +14,39 @@ import (
 	"filippo.io/age/agessh"
 )
 
-// Lock prepares every replacement before writing, and restores originals on write failure.
-// Writing through existing files preserves their permissions, ACLs and extended attributes.
 func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse bool) error {
+	_, err := encryptFiles(directory, files, explicitRecipients, identityPaths, noReuse, false)
+	return err
+}
+
+func Rekey(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string) ([]ProtectedFile, error) {
+	return encryptFiles(directory, files, explicitRecipients, identityPaths, true, true)
+}
+
+func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool) ([]ProtectedFile, error) {
 	var pending []ProtectedFile
 	for _, file := range files {
 		if file.State == "UNKNOWN" {
-			return fmt.Errorf("cannot determine file state: %s", file.Path)
+			return nil, fmt.Errorf("cannot determine file state: %s", file.Path)
 		}
-		if file.State != "LOCKED" {
+		if rekey || file.State != "LOCKED" {
 			pending = append(pending, file)
 		}
 	}
 	if len(pending) == 0 {
-		return nil
+		return nil, nil
 	}
 	directory, err := filepath.Abs(directory)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	directory, err = filepath.EvalSymlinks(directory)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	root, err := gitRoot(directory)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	inGit := root != ""
 	if !inGit {
@@ -48,15 +55,15 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 	if inGit {
 		trusted, err := configValues(directory, "age.trustedRecipients")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if len(trusted) != 0 {
-			return fmt.Errorf("recipient trust verification is not implemented; refusing to lock with age.trustedRecipients configured")
+			return nil, fmt.Errorf("recipient trust verification is not implemented; refusing to encrypt with age.trustedRecipients configured")
 		}
 	}
 	identities, own, err := loadIdentities(directory, root, identityPaths)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	base := explicitRecipients
 	if len(base) == 0 && os.Getenv("GIT_AGE_RECIPIENT") != "" {
@@ -66,13 +73,13 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 	if len(base) == 0 {
 		base, err = ruleRecipients(filepath.Join(root, ".gitage"))
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if len(base) == 0 {
 		base, err = configValues(directory, "age.recipient")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		external = len(base) != 0
 	}
@@ -80,10 +87,11 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 		base = own
 	}
 	if len(base) == 0 {
-		return fmt.Errorf("no recipients configured; use -r, [recipients], or an age identity")
+		return nil, fmt.Errorf("no recipients configured; use -r, [recipients], or an age identity")
 	}
 
 	var replacements []replacement
+	var skipped []ProtectedFile
 	for _, file := range pending {
 		path := filepath.Join(directory, filepath.FromSlash(file.Path))
 		values := append([]string(nil), base...)
@@ -94,7 +102,7 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 			if parent != root {
 				extra, err := ruleRecipients(rule)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				values = append(values, extra...)
 			}
@@ -104,11 +112,27 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 		}
 		recipients, err := parseRecipients(values)
 		if err != nil {
-			return fmt.Errorf("%s: %w", file.Path, err)
+			return nil, fmt.Errorf("%s: %w", file.Path, err)
 		}
 		original, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		plaintext := original
+		if rekey && file.State == "LOCKED" {
+			if len(identities) == 0 {
+				return nil, fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
+			}
+			plaintext, err = decryptContent(original, identities)
+			if err != nil {
+				var noMatch *age.NoIdentityMatchError
+				if errors.As(err, &noMatch) && !containsRecipient(values, own) {
+					// A team member may only have access to part of the repository.
+					skipped = append(skipped, file)
+					continue
+				}
+				return nil, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
+			}
 		}
 		var encrypted []byte
 		if inGit && !noReuse && !external {
@@ -118,17 +142,35 @@ func Lock(directory string, files []ProtectedFile, explicitRecipients, identityP
 			var output bytes.Buffer
 			writer, err := age.Encrypt(&output, recipients...)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			_, writeErr := writer.Write(original)
+			_, writeErr := writer.Write(plaintext)
 			if err := errors.Join(writeErr, writer.Close()); err != nil {
-				return err
+				return nil, err
 			}
 			encrypted = output.Bytes()
 		}
 		replacements = append(replacements, replacement{path, original, encrypted})
 	}
-	return replaceFiles(replacements)
+	if len(replacements) == 0 && len(skipped) != 0 {
+		return nil, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
+	}
+	return skipped, replaceFiles(replacements)
+}
+
+func containsRecipient(values, own []string) bool {
+	for _, value := range values {
+		if strings.HasPrefix(value, "ssh-") {
+			// SSH key comments do not affect recipient identity.
+			value = strings.Join(strings.Fields(value)[:2], " ")
+		}
+		for _, recipient := range own {
+			if value == recipient {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ruleRecipients(path string) ([]string, error) {
@@ -179,8 +221,7 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 	}
 	relative, _ := filepath.Rel(root, path)
 	var stale [][]byte
-	// A staged rules edit can still sit beside ciphertext encrypted to the old list.
-	// Require rules to agree with HEAD before considering either source.
+	// Even staged ciphertext may still use old recipients after a rules edit.
 	for _, rule := range rules {
 		rulePath, _ := filepath.Rel(root, rule)
 		current, readErr := os.ReadFile(rule)

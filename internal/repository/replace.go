@@ -13,9 +13,8 @@ type replacement struct {
 	original, content []byte
 }
 
-// replaceFiles preserves file metadata and rolls back writes when a replacement fails.
 func replaceFiles(replacements []replacement) error {
-	// Detect edits made while replacements were being prepared before changing any file.
+	// Refuse concurrent edits so replacements do not overwrite the user's changes.
 	for _, change := range replacements {
 		info, err := os.Lstat(change.path)
 		if err != nil {
@@ -34,6 +33,7 @@ func replaceFiles(replacements []replacement) error {
 	}
 	for i, change := range replacements {
 		if err := writeExisting(change.path, change.content); err != nil {
+			// The failed write may have changed its file too.
 			for _, previous := range replacements[:i+1] {
 				if restoreErr := writeExisting(previous.path, previous.original); restoreErr != nil {
 					err = errors.Join(err, fmt.Errorf("restore %s: %w", previous.path, restoreErr))
@@ -46,6 +46,7 @@ func replaceFiles(replacements []replacement) error {
 }
 
 func writeExisting(path string, content []byte) (err error) {
+	// Keeping the existing file preserves its permissions, ACLs and extended attributes.
 	if runtime.GOOS == "windows" {
 		info, statErr := os.Stat(path)
 		if statErr != nil {

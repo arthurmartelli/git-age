@@ -11,7 +11,6 @@ import (
 	"filippo.io/age/armor"
 )
 
-// Unlock authenticates every selected ciphertext before replacing any file.
 func Unlock(directory string, files []ProtectedFile, identityPaths []string) error {
 	var pending []ProtectedFile
 	for _, file := range files {
@@ -48,6 +47,7 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 		return fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
 	}
 
+	// Authenticate all ciphertexts first so a bad file cannot leave a partial unlock.
 	var replacements []replacement
 	for _, file := range pending {
 		path := filepath.Join(directory, filepath.FromSlash(file.Path))
