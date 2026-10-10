@@ -83,29 +83,6 @@ func newEditCommand() *cobra.Command {
 	return edit
 }
 
-func newStatusCommand() *cobra.Command {
-	var options struct {
-		Porcelain      bool
-		NullTerminated bool
-	}
-
-	status := &cobra.Command{
-		Use:   "status [PATH ...]",
-		Short: "show working-tree state of protected files",
-		Args:  cobra.ArbitraryArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			options.Porcelain = options.Porcelain || options.NullTerminated
-
-			return notImplemented(cmd, args)
-		},
-	}
-
-	status.Flags().BoolVar(&options.Porcelain, "porcelain", false, "stable machine-readable output")
-	status.Flags().BoolVarP(&options.NullTerminated, "z", "z", false, "NUL-terminate porcelain records; implies --porcelain")
-
-	return status
-}
-
 func newCheckCommand() *cobra.Command {
 	var options struct {
 		Cached bool
