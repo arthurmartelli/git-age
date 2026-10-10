@@ -69,3 +69,21 @@ func TestHelpUnknownCommand(t *testing.T) {
 		t.Errorf("unexpected output: %s", &output)
 	}
 }
+
+func TestHelpTopic(t *testing.T) {
+	for _, topic := range []string{"commands", "git-hooks", "gitage", "shell-completion"} {
+		t.Run(topic, func(t *testing.T) {
+			var output, stderr bytes.Buffer
+			if code := Run([]string{"help", topic}, &output, &stderr); code != 0 {
+				t.Fatalf("help: exit %d, %s", code, &stderr)
+			}
+			heading := strings.ToUpper(strings.ReplaceAll(topic, "-", " "))
+			if topic == "gitage" {
+				heading = ".GITAGE"
+			}
+			if !strings.HasPrefix(output.String(), heading+"\n") || strings.Contains(output.String(), "\nDEPENDENCIES\n") {
+				t.Fatalf("wrong manual section: %s", &output)
+			}
+		})
+	}
+}

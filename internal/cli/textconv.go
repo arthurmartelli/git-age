@@ -7,9 +7,10 @@ import (
 
 func newTextconvCommand(options *globalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "textconv FILE",
-		Short: "print a file decrypted; Git diff driver entrypoint",
-		Args:  cobra.ExactArgs(1),
+		Use:    "textconv FILE",
+		Short:  "print a file decrypted; Git diff driver entrypoint",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			content, err := repository.Textconv(options.directory, args[0])
 			if err != nil {

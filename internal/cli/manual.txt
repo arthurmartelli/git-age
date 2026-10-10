@@ -875,6 +875,13 @@ Supported shells are:
     zsh
     fish
 
+The scripts complete commands, options, mode values, files, and help
+topics. They also support `git age` when Git's shell completion is loaded.
+In zsh, load this script after tools such as Carapace. Other Git commands
+keep their existing completion provider.
+With Carapace, explicitly source the script below; installing it in
+`fpath` alone does not activate the Git bridge.
+
 
 zsh
 ~~~

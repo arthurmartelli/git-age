@@ -31,6 +31,7 @@ func newInstallCommand() *cobra.Command {
 
 		return nil
 	})
+	install.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions([]string{"interactive", "always-lock", "abort"}, cobra.ShellCompDirectiveNoFileComp))
 
 	install.Flags().BoolFunc("unlock-after-commit", "unlock protected files after a successful commit", func(value string) error {
 		b, err := strconv.ParseBool(value)
@@ -111,24 +112,13 @@ func newAuditCommand() *cobra.Command {
 	return audit
 }
 
-func newCompletionCommand() *cobra.Command {
-	completion := &cobra.Command{
-		Use:       "completion SHELL",
-		ValidArgs: []string{"bash", "zsh", "fish"},
-		Short:     "print the shell completion script for bash, zsh or fish",
-		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
-		RunE:      notImplemented,
-	}
-
-	return completion
-}
-
 func newCleanCommand() *cobra.Command {
 	clean := &cobra.Command{
-		Use:   "clean FILE",
-		Short: "reuse unchanged ciphertext; Git clean filter entrypoint",
-		Args:  cobra.ExactArgs(1),
-		RunE:  notImplemented,
+		Use:    "clean FILE",
+		Short:  "reuse unchanged ciphertext; Git clean filter entrypoint",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
+		RunE:   notImplemented,
 	}
 
 	return clean
@@ -141,10 +131,11 @@ func newMergeCommand() *cobra.Command {
 	}
 
 	merge := &cobra.Command{
-		Use:   "merge BASE OURS THEIRS",
-		Short: "merge decrypted versions; Git merge driver entrypoint",
-		Args:  cobra.ExactArgs(3),
-		RunE:  notImplemented,
+		Use:    "merge BASE OURS THEIRS",
+		Short:  "merge decrypted versions; Git merge driver entrypoint",
+		Hidden: true,
+		Args:   cobra.ExactArgs(3),
+		RunE:   notImplemented,
 	}
 
 	merge.Flags().StringVar(&options.Path, "path", "", "protected file path (required)")
@@ -156,9 +147,10 @@ func newMergeCommand() *cobra.Command {
 
 func newHookCommand() *cobra.Command {
 	hook := &cobra.Command{
-		Use:   "hook EVENT [arguments]",
-		Short: "internal Git hook entrypoint",
-		RunE:  notImplemented,
+		Use:    "hook EVENT [arguments]",
+		Short:  "internal Git hook entrypoint",
+		Hidden: true,
+		RunE:   notImplemented,
 	}
 
 	hook.Args = func(cmd *cobra.Command, args []string) error {
