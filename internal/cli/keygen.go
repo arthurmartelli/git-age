@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newKeygenCommand() *cobra.Command {
+func newKeygenCommand(options *globalOptions) *cobra.Command {
 	var output string
 	var noExclude bool
 
@@ -16,20 +16,11 @@ func newKeygenCommand() *cobra.Command {
 		Short: "generate a new age identity",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			directory, err := cmd.Flags().GetString("directory")
+			path, err := repository.KeyPath(options.directory, output)
 			if err != nil {
 				return err
 			}
-			dryRun, err := cmd.Flags().GetBool("dry-run")
-			if err != nil {
-				return err
-			}
-
-			path, err := repository.KeyPath(directory, output)
-			if err != nil {
-				return err
-			}
-			if dryRun {
+			if options.dryRun {
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "would generate identity: %s\n", path)
 				return err
 			}

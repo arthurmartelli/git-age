@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newLockCommand() *cobra.Command {
+func newLockCommand(options *globalOptions) *cobra.Command {
 	var recipients, identities []string
 	var noReuse bool
 
@@ -16,19 +16,7 @@ func newLockCommand() *cobra.Command {
 		Short: "encrypt protected working-tree files",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			directory, err := cmd.Flags().GetString("directory")
-			if err != nil {
-				return err
-			}
-			dryRun, err := cmd.Flags().GetBool("dry-run")
-			if err != nil {
-				return err
-			}
-			verbose, err := cmd.Flags().GetBool("verbose")
-			if err != nil {
-				return err
-			}
-			files, err := repository.ProtectedFiles(directory, args)
+			files, err := repository.ProtectedFiles(options.directory, args)
 			if err != nil {
 				return err
 			}
@@ -37,21 +25,21 @@ func newLockCommand() *cobra.Command {
 					return fmt.Errorf("cannot determine file state: %s", file.Path)
 				}
 			}
-			if !dryRun {
-				if err := repository.Lock(directory, files, recipients, identities, noReuse); err != nil {
+			if !options.dryRun {
+				if err := repository.Lock(options.directory, files, recipients, identities, noReuse); err != nil {
 					return err
 				}
 			}
 			for _, file := range files {
 				var message string
 				switch {
-				case file.State == "LOCKED" && verbose:
+				case file.State == "LOCKED" && options.verbose:
 					message = "already locked"
 				case file.State == "LOCKED":
 					continue
-				case dryRun:
+				case options.dryRun:
 					message = "would lock"
-				case verbose:
+				case options.verbose:
 					message = "locking"
 				default:
 					continue

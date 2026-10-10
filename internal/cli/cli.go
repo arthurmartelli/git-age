@@ -11,6 +11,12 @@ import (
 
 var ErrNotImplemented = errors.New("not implemented")
 
+type globalOptions struct {
+	directory string
+	dryRun    bool
+	verbose   bool
+}
+
 func Run(args []string, stdout, stderr io.Writer) int {
 	root := newRootCommand()
 	root.SetOut(stdout)
@@ -34,6 +40,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 }
 
 func newRootCommand() *cobra.Command {
+	var options globalOptions
+
 	root := &cobra.Command{
 		Use:           "git-age",
 		Short:         "Lock and unlock files selected by .gitage rules using age.",
@@ -45,26 +53,26 @@ func newRootCommand() *cobra.Command {
 	}
 
 	flags := root.PersistentFlags()
-	flags.StringP("directory", "C", ".", "directory to operate on")
-	flags.BoolP("dry-run", "n", false, "show what would happen without modifying files")
-	flags.BoolP("verbose", "v", false, "show detailed operation information")
+	flags.StringVarP(&options.directory, "directory", "C", ".", "directory to operate on")
+	flags.BoolVarP(&options.dryRun, "dry-run", "n", false, "show what would happen without modifying files")
+	flags.BoolVarP(&options.verbose, "verbose", "v", false, "show detailed operation information")
 
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SetHelpCommand(newHelpCommand())
 	root.AddCommand(
-		newKeygenCommand(),
-		newLockCommand(),
+		newKeygenCommand(&options),
+		newLockCommand(&options),
 		newRekeyCommand(),
-		newUnlockCommand(),
+		newUnlockCommand(&options),
 		newEditCommand(),
-		newStatusCommand(),
-		newCheckCommand(),
+		newStatusCommand(&options),
+		newCheckCommand(&options),
 		newInstallCommand(),
 		newUninstallCommand(),
 		newTrustCommand(),
 		newAuditCommand(),
 		newCompletionCommand(),
-		newTextconvCommand(),
+		newTextconvCommand(&options),
 		newCleanCommand(),
 		newMergeCommand(),
 		newHookCommand(),

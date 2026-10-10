@@ -7,7 +7,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newUnlockCommand() *cobra.Command {
+func newUnlockCommand(options *globalOptions) *cobra.Command {
 	var identities []string
 
 	unlock := &cobra.Command{
@@ -15,19 +15,7 @@ func newUnlockCommand() *cobra.Command {
 		Short: "decrypt protected working-tree files",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			directory, err := cmd.Flags().GetString("directory")
-			if err != nil {
-				return err
-			}
-			dryRun, err := cmd.Flags().GetBool("dry-run")
-			if err != nil {
-				return err
-			}
-			verbose, err := cmd.Flags().GetBool("verbose")
-			if err != nil {
-				return err
-			}
-			files, err := repository.ProtectedFiles(directory, args)
+			files, err := repository.ProtectedFiles(options.directory, args)
 			if err != nil {
 				return err
 			}
@@ -36,21 +24,21 @@ func newUnlockCommand() *cobra.Command {
 					return fmt.Errorf("cannot determine file state: %s", file.Path)
 				}
 			}
-			if !dryRun {
-				if err := repository.Unlock(directory, files, identities); err != nil {
+			if !options.dryRun {
+				if err := repository.Unlock(options.directory, files, identities); err != nil {
 					return err
 				}
 			}
 			for _, file := range files {
 				var message string
 				switch {
-				case file.State == "UNLOCKED" && verbose:
+				case file.State == "UNLOCKED" && options.verbose:
 					message = "already unlocked"
 				case file.State == "UNLOCKED":
 					continue
-				case dryRun:
+				case options.dryRun:
 					message = "would unlock"
-				case verbose:
+				case options.verbose:
 					message = "unlocking"
 				default:
 					continue

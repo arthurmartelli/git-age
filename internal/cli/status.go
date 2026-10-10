@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newStatusCommand() *cobra.Command {
+func newStatusCommand(options *globalOptions) *cobra.Command {
 	var porcelain, nullTerminated bool
 
 	status := &cobra.Command{
@@ -16,15 +16,7 @@ func newStatusCommand() *cobra.Command {
 		Short: "show working-tree state of protected files",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			directory, err := cmd.Flags().GetString("directory")
-			if err != nil {
-				return err
-			}
-			verbose, err := cmd.Flags().GetBool("verbose")
-			if err != nil {
-				return err
-			}
-			files, err := repository.ProtectedFiles(directory, args)
+			files, err := repository.ProtectedFiles(options.directory, args)
 			if err != nil {
 				return err
 			}
@@ -44,7 +36,7 @@ func newStatusCommand() *cobra.Command {
 					}
 				} else {
 					line = fmt.Sprintf("%-10s %s\n", file.State, file.Path)
-					if verbose {
+					if options.verbose {
 						line += fmt.Sprintf("           matched %s:%d: %s\n", file.RuleFile, file.RuleLine, file.Pattern)
 					}
 				}

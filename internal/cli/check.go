@@ -12,7 +12,7 @@ import (
 
 var errCheckFailed = errors.New("check failed")
 
-func newCheckCommand() *cobra.Command {
+func newCheckCommand(options *globalOptions) *cobra.Command {
 	var cached bool
 
 	check := &cobra.Command{
@@ -20,18 +20,10 @@ func newCheckCommand() *cobra.Command {
 		Short: "fail if protected files are plaintext",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			directory, err := cmd.Flags().GetString("directory")
-			if err != nil {
-				return err
-			}
-			verbose, err := cmd.Flags().GetBool("verbose")
-			if err != nil {
-				return err
-			}
-
 			var files []repository.ProtectedFile
+			var err error
 			if cached {
-				result, err := repository.CheckIndex(directory)
+				result, err := repository.CheckIndex(options.directory)
 				if len(result.RemovedRules) != 0 && !allowCheck("GIT_AGE_ALLOW_REMOVE") {
 					return reportCheckFailure(cmd, "refusing to commit the removal of .gitage files", result.RemovedRules,
 						"Restore them with:\n\n  git restore --staged --worktree -- "+shellPaths(result.RemovedRules)+"\n\nTo allow removal, set GIT_AGE_ALLOW_REMOVE=1.")
@@ -45,7 +37,7 @@ func newCheckCommand() *cobra.Command {
 				}
 				files = result.Files
 			} else {
-				files, err = repository.ProtectedFiles(directory, nil)
+				files, err = repository.ProtectedFiles(options.directory, nil)
 				if err != nil {
 					return err
 				}
@@ -70,7 +62,7 @@ func newCheckCommand() *cobra.Command {
 				}
 				return reportCheckFailure(cmd, message, unlocked, "")
 			}
-			if verbose {
+			if options.verbose {
 				message := "protected working-tree files are locked"
 				if cached {
 					message = "staged protected files are locked"

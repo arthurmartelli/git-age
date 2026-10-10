@@ -30,7 +30,7 @@ func TestHelpCommand(t *testing.T) {
 	root.SetOut(&output)
 
 	help := newHelpCommand()
-	lock := newLockCommand()
+	lock := newLockCommand(&globalOptions{})
 	root.AddCommand(help, lock)
 
 	if err := help.RunE(help, []string{"lock"}); err != nil {
@@ -59,7 +59,7 @@ func TestHelpUnknownCommand(t *testing.T) {
 	root.SetOut(&output)
 
 	help := newHelpCommand()
-	root.AddCommand(help, newLockCommand())
+	root.AddCommand(help, newLockCommand(&globalOptions{}))
 
 	err := help.RunE(help, []string{"lockd"})
 	if err == nil || err.Error() != `unknown help command "lockd" (see git-age --help)` {
