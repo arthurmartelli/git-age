@@ -4,12 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
-
-var ErrNotImplemented = errors.New("not implemented")
 
 type globalOptions struct {
 	directory string
@@ -25,10 +22,6 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	if err := root.Execute(); err != nil {
 		if errors.Is(err, errCheckFailed) || errors.Is(err, errMergeConflict) {
-			return 1
-		}
-		if errors.Is(err, ErrNotImplemented) {
-			fmt.Fprintf(stderr, "error: %v\n", err)
 			return 1
 		}
 
@@ -70,7 +63,7 @@ func newRootCommand() *cobra.Command {
 		newInstallCommand(&options),
 		newUninstallCommand(&options),
 		newTrustCommand(&options),
-		newAuditCommand(),
+		newAuditCommand(&options),
 		newCompletionCommand(),
 		newTextconvCommand(&options),
 		newCleanCommand(&options),
@@ -79,10 +72,4 @@ func newRootCommand() *cobra.Command {
 	)
 
 	return root
-}
-
-func notImplemented(cmd *cobra.Command, args []string) error {
-	name := strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
-
-	return fmt.Errorf("%s: %w", name, ErrNotImplemented)
 }
