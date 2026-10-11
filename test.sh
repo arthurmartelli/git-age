@@ -129,7 +129,15 @@ without_terminal() {
   else perl -MPOSIX -e 'POSIX::setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' -- "$@"
   fi
 }
-answer() { printf '%b' "$1" | on_terminal "git commit -q -m '$2'"; }
+answer() (
+  # macOS script can inject EOF before flushing queued input. Keep a writer
+  # open until the commit exits; the subshell closes the descriptor afterwards.
+  mkfifo "$tmp/terminal-input"
+  exec 3<>"$tmp/terminal-input"
+  rm "$tmp/terminal-input"
+  printf '%b' "$1" >&3
+  on_terminal "git commit -q -m '$2'" <&3 3>&-
+)
 
 section "lock, unlock and status"
 
