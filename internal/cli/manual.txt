@@ -461,6 +461,9 @@ Run:
 This removes the hooks, Git attributes and repository configuration
 installed by `git-age`.
 
+Use `git-age -n uninstall` to preview the removals. Hooks belonging to
+other tools and attributes outside the generated block are kept.
+
 It does not remove:
 
 * identities;

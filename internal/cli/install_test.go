@@ -432,7 +432,7 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 }
 
 func TestInstallDryRunAndPreflight(t *testing.T) {
-	for _, scenario := range []string{"dry run", "disable dry run", "existing hook", "symlink hook", "directory hook", "malformed rules", "broken attributes", "disabled hooks"} {
+	for _, scenario := range []string{"dry run", "disable dry run", "existing hook", "symlink hook", "directory hook", "malformed rules", "broken attributes", "symlink attributes", "disabled hooks"} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
@@ -466,6 +466,14 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 				writeStatusFile(t, directory, "sub/.gitage", "[unknown]\n")
 			case "broken attributes":
 				writeStatusFile(t, filepath.Dir(attributes), "attributes", "# BEGIN git-age (generated from .gitage; do not edit)\n# user data\n")
+			case "symlink attributes":
+				writeStatusFile(t, directory, "target", "# user data\n")
+				if err := os.MkdirAll(filepath.Dir(attributes), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(directory, "target"), attributes); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
 			case "disabled hooks":
 				cleanGit(t, directory, "config", "core.hooksPath", os.DevNull)
 			}

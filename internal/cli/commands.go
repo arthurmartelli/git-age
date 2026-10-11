@@ -2,17 +2,6 @@ package cli
 
 import "github.com/spf13/cobra"
 
-func newUninstallCommand() *cobra.Command {
-	uninstall := &cobra.Command{
-		Use:   "uninstall",
-		Short: "remove the hooks, git config and attributes that install set up",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
-	}
-
-	return uninstall
-}
-
 func newTrustCommand() *cobra.Command {
 	var options struct {
 		Show bool

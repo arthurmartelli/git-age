@@ -58,7 +58,7 @@ printf '%s\n' "${COMPREPLY[@]}"`
 					{[]string{"git-age", "install", "--mode", "=", "al"}, "always-lock"},
 					{[]string{"git-age", "install", "--mode=al"}, "always-lock"},
 					{[]string{"git-age", "lock", "--no"}, "--no-reuse"},
-					{[]string{"git-age", "unlock", "-i", filepath.Join(directory, "identity k")}, key},
+					{[]string{"git-age", "unlock", "-i", filepath.ToSlash(filepath.Join(directory, "identity k"))}, filepath.ToSlash(key)},
 					{[]string{"git-age", "help", "git-ho"}, "git-hooks"},
 				} {
 					command := exec.Command(shell, append([]string{"-c", program, "bash", path}, test.words...)...)
@@ -107,7 +107,11 @@ words=(git status) CURRENT=2
 					t.Fatalf("existing Git completer after reloading: %v\n%s", err, output)
 				}
 			case "fish":
-				for _, request := range []string{"git-age install --mode=al", "git age install --mode=al"} {
+				for _, request := range []string{
+					"git-age install --mode=al", "git age install --mode=al",
+					`git -C "directory with spaces" age install --mode=al`,
+					`git age -C "directory with spaces" install --mode=al`,
+				} {
 					output, err := exec.Command(shell, "--no-config", "-c", `source $argv[1]; complete -C $argv[2]`, path, request).CombinedOutput()
 					if err != nil || !strings.Contains(string(output), "--mode=always-lock") {
 						t.Errorf("%s: %v\n%s", request, err, output)

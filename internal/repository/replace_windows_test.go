@@ -2,10 +2,44 @@ package repository
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
+
+func TestForgetStatWindowsShortPath(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := syscall.UTF16PtrFromString(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]uint16, 32768)
+	n, err := syscall.GetShortPathName(name, &buffer[0], uint32(len(buffer)))
+	if err != nil || n == 0 || n >= uint32(len(buffer)) {
+		t.Fatalf("short path: length %d, %v", n, err)
+	}
+	short := syscall.UTF16ToString(buffer[:n])
+	if strings.EqualFold(root, short) {
+		t.Skip("filesystem does not provide a short path alias")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if output, err := exec.Command("git", "-C", root, "-c", "init.templateDir=", "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("init: %v, %s", err, output)
+	}
+	path := filepath.Join(short, "ours")
+	if err := os.WriteFile(path, []byte("merged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := forgetStat([]replacement{{path: path}}); err != nil {
+		t.Fatalf("refresh through short path: %v", err)
+	}
+}
 
 func TestWriteExistingPreservesWindowsMetadata(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "secret.env")

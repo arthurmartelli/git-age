@@ -51,14 +51,20 @@ func replaceFiles(replacements []replacement) error {
 func forgetStat(replacements []replacement) error {
 	byRoot := map[string][]string{}
 	for _, change := range replacements {
-		root, err := gitRoot(filepath.Dir(change.path))
+		// Match Git's canonical root when a parent uses a symlink or a Windows
+		// short name, while leaving the file itself subject to regular-file checks.
+		directory, err := filepath.EvalSymlinks(filepath.Dir(change.path))
+		if err != nil {
+			return err
+		}
+		root, err := gitRoot(directory)
 		if err != nil {
 			return err
 		}
 		if root == "" {
 			continue
 		}
-		relative, err := filepath.Rel(root, change.path)
+		relative, err := filepath.Rel(root, filepath.Join(directory, filepath.Base(change.path)))
 		if err != nil {
 			return err
 		}

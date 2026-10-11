@@ -149,11 +149,17 @@ func Install(directory string, options InstallOptions, stdout io.Writer) error {
 }
 
 func gitPath(root, name string) (string, error) {
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--path-format=absolute", "--git-path", name).Output()
+	// Git's absolute path format resolves symlinks, hiding them from the
+	// file checks used by install and uninstall. Make the path absolute here.
+	output, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", name).Output()
 	if err != nil {
 		return "", err
 	}
-	return filepath.FromSlash(strings.TrimSuffix(strings.TrimSuffix(string(output), "\n"), "\r")), nil
+	path := filepath.FromSlash(strings.TrimSuffix(strings.TrimSuffix(string(output), "\n"), "\r"))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	return path, nil
 }
 
 func setInstallConfig(root, key, value string) error {

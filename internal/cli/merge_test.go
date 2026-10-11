@@ -15,7 +15,7 @@ import (
 func TestMerge(t *testing.T) {
 	for _, scenario := range []string{
 		"clean", "armored", "mixed", "plaintext", "empty base", "identical",
-		"unchanged ours", "unchanged theirs", "subdirectory", "nested recipients",
+		"unchanged ours", "unchanged theirs", "subdirectory", "symlink inputs", "nested recipients",
 		"recipient edit", "external recipients", "conflict", "diff3", "custom markers",
 	} {
 		t.Run(scenario, func(t *testing.T) {
@@ -80,6 +80,13 @@ func TestMerge(t *testing.T) {
 				cleanGit(t, directory, "commit", "-qm", "ours")
 			}
 			inputs := mergeInputs(t, workingDirectory, contents)
+			if scenario == "symlink inputs" {
+				alias := filepath.Join(t.TempDir(), "repo")
+				if err := os.Symlink(directory, alias); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				inputs = []string{filepath.Join(alias, ".merge/base"), filepath.Join(alias, ".merge/ours"), filepath.Join(alias, ".merge/theirs")}
+			}
 			indexBefore := cleanGit(t, directory, "ls-files", "--stage", "-z")
 			workingBefore, err := os.ReadFile(filepath.Join(directory, "secret.env"))
 			if err != nil {

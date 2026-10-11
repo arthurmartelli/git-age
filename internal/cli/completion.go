@@ -33,7 +33,8 @@ func newCompletionCommand() *cobra.Command {
 				err = root.GenZshCompletion(out)
 				suffix = zshCompletion
 			case "fish":
-				return root.GenFishCompletion(out, true)
+				err = root.GenFishCompletion(out, true)
+				suffix = fishCompletion
 			}
 			if err != nil {
 				return err
@@ -43,6 +44,34 @@ func newCompletionCommand() *cobra.Command {
 		},
 	}
 }
+
+// Preserve argument boundaries and dispatch git age without relying on Fish's
+// version-specific completion support for custom Git commands.
+const fishCompletion = `
+function __git_age_perform_completion
+    set -l args (commandline -opc)
+    set -l lastArg (commandline -ct)
+    set -l results (GIT_AGE_ACTIVE_HELP=0 $args[1] __complete $args[2..-1] "$lastArg" 2>/dev/null)
+    set -l flagPrefix (string match -r -- '-.*=' "$lastArg")
+    for comp in $results[1..-2]
+	printf '%s%s\n' "$flagPrefix" "$comp"
+    end
+    printf '%s\n' "$results[-1]"
+end
+function __git_age_git_args
+    set -l args (commandline -opc)
+    set -e args[1]
+    argparse -s C= c=+ p/paginate P/no-pager G/git-dir= W/work-tree= -- $args 2>/dev/null; or return
+    test "$argv[1]" = age; or return 1
+    printf '%s\n' $argv[2..-1]
+end
+function __git_age_git_completion
+    set -l args (__git_age_git_args)
+    set -l line (string join ' ' -- (string escape -- git-age $args (commandline -ct)))
+    complete -C "$line"
+end
+complete -c git -n '__git_age_git_args >/dev/null' -f -a '(__git_age_git_completion)'
+`
 
 // Cobra invokes the completer during autoload, before the wrapper below exists.
 const zshInit = `#compdef git-age
