@@ -5,52 +5,40 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
 )
 
 func Unlock(directory string, files []ProtectedFile, identityPaths []string) error {
+	if err := CheckKnown(files); err != nil {
+		return err
+	}
 	var pending []ProtectedFile
 	for _, file := range files {
-		if file.State == "UNKNOWN" {
-			return fmt.Errorf("cannot determine file state: %s", file.Path)
-		}
-		if file.State == "LOCKED" {
+		if file.State == Locked {
 			pending = append(pending, file)
 		}
 	}
 	if len(pending) == 0 {
 		return nil
 	}
-	directory, err := filepath.Abs(directory)
+	directory, root, _, err := resolveDirectory(directory)
 	if err != nil {
 		return err
-	}
-	directory, err = filepath.EvalSymlinks(directory)
-	if err != nil {
-		return err
-	}
-	root, err := gitRoot(directory)
-	if err != nil {
-		return err
-	}
-	if root == "" {
-		root = directory
 	}
 	identities, _, err := loadIdentities(directory, root, identityPaths)
 	if err != nil {
 		return err
 	}
 	if len(identities) == 0 {
-		return fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
+		return errNoIdentity
 	}
 
 	// Authenticate all ciphertexts first so a bad file cannot leave a partial unlock.
 	var replacements []replacement
 	for _, file := range pending {
-		path := filepath.Join(directory, filepath.FromSlash(file.Path))
+		path := nativePath(directory, file.Path)
 		original, err := os.ReadFile(path)
 		if err != nil {
 			return err

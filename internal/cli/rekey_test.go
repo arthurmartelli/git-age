@@ -47,7 +47,7 @@ func TestRekeyRecipientSources(t *testing.T) {
 				writeStatusFile(t, directory, "a.env", string(before))
 				writeStatusFile(t, directory, "b.env", "plaintext")
 				writeStatusFile(t, directory, "public.txt", "untouched")
-				output, err := runRekey(directory, args...)
+				output, err := runCommand(directory, "rekey", args...)
 				if err != nil || output != "" {
 					t.Fatalf("rekey: %q, %v", output, err)
 				}
@@ -97,7 +97,7 @@ func TestRekeyIdentitySources(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := runRekey(directory, args...); err != nil {
+			if _, err := runCommand(directory, "rekey", args...); err != nil {
 				t.Fatal(err)
 			}
 			assertRekeyPlaintext(t, readRekeyFile(t, directory, "a.env"), current, "secret")
@@ -127,7 +127,7 @@ func TestRekeyPathsAndNestedRecipients(t *testing.T) {
 				}
 				directory = alias
 			}
-			output, err := runRekey(filepath.Join(directory, "sub"), "-v", "deep", "deep/b.env")
+			output, err := runCommand(filepath.Join(directory, "sub"), "rekey", "-v", "deep", "deep/b.env")
 			if err != nil || output != "rekeying: deep/b.env\n" {
 				t.Fatalf("rekey subdirectory: %q, %v", output, err)
 			}
@@ -140,7 +140,7 @@ func TestRekeyPathsAndNestedRecipients(t *testing.T) {
 					t.Fatalf("unselected file changed: %s", path)
 				}
 			}
-			if _, err := runRekey(directory, "sub", "missing.env"); err == nil {
+			if _, err := runCommand(directory, "rekey", "sub", "missing.env"); err == nil {
 				t.Fatal("expected missing path error")
 			}
 			if !bytes.Equal(after, readRekeyFile(t, directory, "sub/deep/b.env")) {
@@ -185,7 +185,7 @@ func TestRekeyFailureChangesNothing(t *testing.T) {
 			for path, content := range originals {
 				writeStatusFile(t, directory, path, string(content))
 			}
-			output, err := runRekey(directory, "-v")
+			output, err := runCommand(directory, "rekey", "-v")
 			if err == nil || output != "" {
 				t.Fatalf("expected failure without success output: %q, %v", output, err)
 			}
@@ -210,7 +210,7 @@ func TestRekeyLimitedAccess(t *testing.T) {
 	app := encryptUnlockFixture(t, alice, "app", false)
 	writeStatusFile(t, directory, "app.env", string(app))
 	writeStatusFile(t, directory, "prod/db.env", string(encryptUnlockFixture(t, carol, "db", false)))
-	output, err := runRekey(directory, "-v")
+	output, err := runCommand(directory, "rekey", "-v")
 	if err != nil || !strings.Contains(output, "skipping app.env: not encrypted to you") || !strings.Contains(output, "rekeying: prod/db.env") || strings.Contains(output, "rekeying: app.env") {
 		t.Fatalf("limited access: %q, %v", output, err)
 	}
@@ -223,13 +223,13 @@ func TestRekeyLimitedAccess(t *testing.T) {
 	// Loss of expected access may indicate tampering, so it must stop the batch.
 	writeStatusFile(t, directory, "prod/db.env", string(encryptUnlockFixture(t, alice, "tampered", false)))
 	writeStatusFile(t, directory, "a.env", "plaintext")
-	if _, err := runRekey(directory); err == nil || !strings.Contains(err.Error(), "cannot decrypt prod/db.env") {
+	if _, err := runCommand(directory, "rekey"); err == nil || !strings.Contains(err.Error(), "cannot decrypt prod/db.env") {
 		t.Fatalf("expected decryption error: %v", err)
 	}
 	if string(readRekeyFile(t, directory, "a.env")) != "plaintext" {
 		t.Fatal("plaintext changed on decryption failure")
 	}
-	if _, err := runRekey(directory, "app.env"); err == nil {
+	if _, err := runCommand(directory, "rekey", "app.env"); err == nil {
 		t.Fatal("expected error when no selected file can be decrypted")
 	}
 }
@@ -241,7 +241,7 @@ func TestRekeyDryRun(t *testing.T) {
 	for path, content := range originals {
 		writeStatusFile(t, directory, path, content)
 	}
-	output, err := runRekey(directory, "-n", "-i", "missing.key")
+	output, err := runCommand(directory, "rekey", "-n", "-i", "missing.key")
 	if err != nil || output != "would rekey: a.env\nwould rekey: b.env\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
 	}
@@ -263,7 +263,7 @@ func TestRekeyOutsideGit(t *testing.T) {
 	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
 	writeStatusFile(t, directory, "a.env", "secret")
 	for range 2 {
-		if _, err := runRekey(directory); err != nil {
+		if _, err := runCommand(directory, "rekey"); err != nil {
 			t.Fatal(err)
 		}
 		assertRekeyPlaintext(t, readRekeyFile(t, directory, "a.env"), identity, "secret")
@@ -279,7 +279,7 @@ func TestRekeyNeverReusesGitCiphertext(t *testing.T) {
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
 	writeStatusFile(t, directory, "a.env", "secret")
-	if _, err := runLock(directory); err != nil {
+	if _, err := runCommand(directory, "lock"); err != nil {
 		t.Fatal(err)
 	}
 	before := readRekeyFile(t, directory, "a.env")
@@ -295,7 +295,7 @@ func TestRekeyNeverReusesGitCiphertext(t *testing.T) {
 		if plaintext {
 			writeStatusFile(t, directory, "a.env", "secret")
 		}
-		if _, err := runRekey(directory); err != nil {
+		if _, err := runCommand(directory, "rekey"); err != nil {
 			t.Fatal(err)
 		}
 		after := readRekeyFile(t, directory, "a.env")
@@ -318,24 +318,14 @@ func TestRekeyPlaintextNeedsNoIdentity(t *testing.T) {
 	t.Setenv("GIT_AGE_RECIPIENT", "")
 	identity := rekeyIdentity(t)
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	if output, err := runRekey(directory, "-i", "missing.key"); err != nil || output != "" {
+	if output, err := runCommand(directory, "rekey", "-i", "missing.key"); err != nil || output != "" {
 		t.Fatalf("no protected files: %q, %v", output, err)
 	}
 	writeStatusFile(t, directory, "a.env", "plaintext")
-	if _, err := runRekey(directory, "-r", identity.Recipient().String()); err != nil {
+	if _, err := runCommand(directory, "rekey", "-r", identity.Recipient().String()); err != nil {
 		t.Fatal(err)
 	}
 	assertRekeyPlaintext(t, readRekeyFile(t, directory, "a.env"), identity, "plaintext")
-}
-
-func runRekey(directory string, args ...string) (string, error) {
-	var output bytes.Buffer
-	root := newRootCommand()
-	root.SetOut(&output)
-	root.SetErr(&output)
-	root.SetArgs(append([]string{"-C", directory, "rekey"}, args...))
-	err := root.Execute()
-	return output.String(), err
 }
 
 func rekeyIdentity(t *testing.T) *age.X25519Identity {

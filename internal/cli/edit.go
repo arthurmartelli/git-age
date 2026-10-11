@@ -31,19 +31,16 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 			if info.IsDir() {
 				return fmt.Errorf("%s: is a directory", args[0])
 			}
-			files, err := repository.ProtectedFiles(options.directory, args)
+			files, err := knownFiles(options.directory, args)
 			if err != nil {
 				return err
 			}
 			file := files[0]
-			if file.State == "UNKNOWN" {
-				return fmt.Errorf("cannot determine file state: %s", file.Path)
-			}
 			if options.dryRun {
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "would edit: %s\n", file.Path)
 				return err
 			}
-			if file.State == "UNLOCKED" {
+			if file.State == repository.Unlocked {
 				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s is unlocked; editing in place\n", file.Path); err != nil {
 					return err
 				}

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/arthurmartelli/git-age/internal/repository"
@@ -17,6 +15,8 @@ import (
 func newHookCommand(options *globalOptions) *cobra.Command {
 	hook := &cobra.Command{
 		Use: "hook EVENT [arguments]", Short: "internal Git hook entrypoint", Hidden: true,
+		// Args rejects a missing or unknown event before PersistentPreRunE
+		// runs; RunE only makes the command runnable so that Args is checked.
 		Args: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("hook: an event is required (see git-age hook --help)")
 		},
@@ -35,14 +35,14 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 	hook.AddCommand(&cobra.Command{
 		Use: "post-commit", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			enabled, err := hookBoolean(options.directory, "GIT_AGE_UNLOCK_AFTER_COMMIT", "age.unlockAfterCommit")
+			enabled, err := repository.UnlockAfterCommit(options.directory)
 			if err != nil {
 				return err
 			}
 			if !enabled || options.dryRun {
 				return nil
 			}
-			root, err := hookRoot(options.directory)
+			root, err := repository.Root(options.directory)
 			if err != nil {
 				return err
 			}
@@ -65,23 +65,25 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 			return prePush(cmd, options, args[0])
 		},
 	})
-	for _, event := range []string{"post-checkout", "post-merge", "post-rewrite"} {
+	hook.AddCommand(&cobra.Command{
+		Use: "post-merge", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			changed, err := repository.MergedRecipientChanges(options.directory)
+			if err != nil {
+				_, err = fmt.Fprintf(cmd.ErrOrStderr(), "git-age: warning: could not check merged recipients: %v\n", err)
+				return err
+			}
+			if len(changed) != 0 {
+				_, err = fmt.Fprintln(cmd.ErrOrStderr(), "git-age: warning: this merge changes [recipients] in "+shellPaths(changed)+"; review the changes before encrypting.")
+			}
+			return err
+		},
+	})
+	// These hooks only refresh the attributes, in PersistentPreRunE.
+	for _, event := range []string{"post-checkout", "post-rewrite"} {
 		hook.AddCommand(&cobra.Command{
 			Use: event, Args: cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				if event == "post-merge" {
-					changed, err := repository.MergedRecipientChanges(options.directory)
-					if err != nil {
-						_, err = fmt.Fprintf(cmd.ErrOrStderr(), "git-age: warning: could not check merged recipients: %v\n", err)
-						return err
-					}
-					if len(changed) != 0 {
-						_, err = fmt.Fprintln(cmd.ErrOrStderr(), "git-age: warning: this merge changes [recipients] in "+shellPaths(changed)+"; review the changes before encrypting.")
-						return err
-					}
-				}
-				return nil
-			},
+			RunE: func(cmd *cobra.Command, args []string) error { return nil },
 		})
 	}
 	return hook
@@ -130,9 +132,8 @@ func prePush(cmd *cobra.Command, options *globalOptions, remote string) error {
 
 func preCommit(cmd *cobra.Command, options *globalOptions) error {
 	check, err := repository.CheckCommit(options.directory)
-	if len(check.RemovedRules) != 0 && !allowCheck("GIT_AGE_ALLOW_REMOVE") {
-		return reportCheckFailure(cmd, "refusing to commit the removal of .gitage files", check.RemovedRules,
-			"Restore them with:\n\n  git restore --staged --worktree -- "+shellPaths(check.RemovedRules)+"\n\nUse `git-age uninstall` to remove the integration, or set GIT_AGE_ALLOW_REMOVE=1 to allow this removal.")
+	if err := refuseRemovedRules(cmd, check.RemovedRules, "Use `git-age uninstall` to remove the integration, or set GIT_AGE_ALLOW_REMOVE=1 to allow this removal."); err != nil {
+		return err
 	}
 	if err != nil {
 		return err
@@ -142,22 +143,22 @@ func preCommit(cmd *cobra.Command, options *globalOptions) error {
 			return err
 		}
 	}
-	if len(check.PrivateKeys) != 0 && !allowCheck("GIT_AGE_ALLOW_PRIVATE_KEYS") {
-		return reportCheckFailure(cmd, "refusing to commit private age keys", check.PrivateKeys, "Unstage these files or set GIT_AGE_ALLOW_PRIVATE_KEYS=1.")
+	if err := refuseUnless(cmd, "GIT_AGE_ALLOW_PRIVATE_KEYS", check.PrivateKeys, "refusing to commit private age keys", "Unstage these files or set GIT_AGE_ALLOW_PRIVATE_KEYS=1."); err != nil {
+		return err
 	}
 	if !check.HasRules {
 		return nil
 	}
-	mode, err := hookMode(options.directory)
+	mode, err := repository.HookMode(options.directory)
 	if err != nil {
 		return err
 	}
-	if len(check.StaleFiles) != 0 && !allowCheck("GIT_AGE_ALLOW_STALE_RECIPIENTS") {
-		return reportCheckFailure(cmd, "files are still encrypted to the previous list of [recipients]", check.StaleFiles, "Run `git-age rekey` and stage the encrypted files before committing the recipient changes.")
+	if err := refuseUnless(cmd, "GIT_AGE_ALLOW_STALE_RECIPIENTS", check.StaleFiles, "files are still encrypted to the previous list of [recipients]", "Run `git-age rekey` and stage the encrypted files before committing the recipient changes."); err != nil {
+		return err
 	}
 	var plaintext []string
 	for _, file := range check.Files {
-		if file.State == "UNLOCKED" {
+		if file.State == repository.Unlocked {
 			plaintext = append(plaintext, file.Path)
 		}
 	}
@@ -219,53 +220,6 @@ func refreshGitAttributes(cmd *cobra.Command, directory string) error {
 		return err
 	}
 	return nil
-}
-
-func hookMode(directory string) (string, error) {
-	value := os.Getenv("GIT_AGE_HOOK_MODE")
-	if value == "" {
-		output, err := exec.Command("git", "-C", directory, "config", "--get", "age.hookMode").Output()
-		var exit *exec.ExitError
-		if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
-			return "", err
-		}
-		value = strings.TrimSpace(string(output))
-	}
-	if value == "" {
-		value = "interactive"
-	}
-	return value, choice(value, "interactive", "always-lock", "abort")
-}
-
-func hookBoolean(directory, environment, key string) (bool, error) {
-	value, configured := os.LookupEnv(environment)
-	if !configured {
-		output, err := exec.Command("git", "-C", directory, "config", "--bool", "--get", key).Output()
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == 1 {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		value = strings.TrimSpace(string(output))
-	}
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true, nil
-	case "0", "false", "no", "off":
-		return false, nil
-	default:
-		return false, fmt.Errorf("invalid boolean value %q for %s", value, environment)
-	}
-}
-
-func hookRoot(directory string) (string, error) {
-	output, err := exec.Command("git", "-C", directory, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return "", err
-	}
-	return filepath.FromSlash(strings.TrimSpace(string(output))), nil
 }
 
 func promptHookChoice(input io.Reader, output io.Writer) (string, error) {

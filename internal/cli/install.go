@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"strconv"
+	"strings"
 
 	"github.com/arthurmartelli/git-age/internal/repository"
 	"github.com/spf13/cobra"
@@ -20,30 +20,15 @@ func newInstallCommand(global *globalOptions) *cobra.Command {
 		},
 	}
 
-	install.Flags().Func("mode", "pre-commit policy: interactive, always-lock, abort", func(value string) error {
-		if err := choice(value, "interactive", "always-lock", "abort"); err != nil {
-			return err
-		}
+	install.Flags().Func("mode", "pre-commit policy: "+strings.Join(repository.HookModes, ", "), func(value string) error {
 		options.Mode = value
-
-		return nil
+		return repository.ValidateHookMode(value)
 	})
-	install.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions([]string{"interactive", "always-lock", "abort"}, cobra.ShellCompDirectiveNoFileComp))
+	install.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions(repository.HookModes, cobra.ShellCompDirectiveNoFileComp))
 
-	install.Flags().BoolFunc("unlock-after-commit", "unlock protected files after a successful commit", func(value string) error {
-		b, err := strconv.ParseBool(value)
-		options.UnlockAfterCommit = &b
-
-		return err
-	})
-
-	install.Flags().BoolFunc("no-unlock-after-commit", "keep protected files locked after a successful commit", func(value string) error {
-		b, err := strconv.ParseBool(value)
-		b = !b
-		options.UnlockAfterCommit = &b
-
-		return err
-	})
+	unlockAfterCommit := func(enabled bool) { options.UnlockAfterCommit = &enabled }
+	boolFlag(install.Flags(), "unlock-after-commit", "unlock protected files after a successful commit", unlockAfterCommit, false)
+	boolFlag(install.Flags(), "no-unlock-after-commit", "keep protected files locked after a successful commit", unlockAfterCommit, true)
 
 	booleanFlags(install.Flags(), "diff", &options.Diff, "show protected files as plaintext in Git diffs")
 	booleanFlags(install.Flags(), "merge", &options.Merge, "merge protected files decrypted and re-encrypt the result")

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -74,7 +73,7 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 	}
 	// Only remove the local keys install writes, preserving identities,
 	// recipients, trust settings and configuration inherited from other files.
-	output, err := exec.Command("git", "-C", root, "config", "--local", "--null", "--list").Output()
+	output, err := git(root, "config", "--local", "--null", "--list")
 	if err != nil {
 		return err
 	}
@@ -83,12 +82,9 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 		key, _, _ := strings.Cut(string(record), "\n")
 		configured[key] = true
 	}
-	for _, key := range []string{
-		"age.hookmode", "age.unlockaftercommit",
-		"diff.age.textconv", "diff.age.cachetextconv",
-		"merge.age.name", "merge.age.driver",
-		"filter.age.clean", "filter.age.smudge", "filter.age.required",
-	} {
+	for _, key := range installConfigKeys() {
+		// Git lists config keys in lowercase.
+		key = strings.ToLower(key)
 		if configured[key] {
 			steps = append(steps, installStep{"unset repo git config " + key, func() error {
 				return setInstallConfig(root, key, "")
@@ -104,17 +100,8 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 		_, err := fmt.Fprintln(stdout, "git-age: nothing to uninstall")
 		return err
 	}
-	for _, step := range steps {
-		if dryRun {
-			if _, err := fmt.Fprintln(stdout, "would "+step.description); err != nil {
-				return err
-			}
-		} else if err := step.apply(); err != nil {
-			return fmt.Errorf("%s: %w", step.description, err)
-		}
-	}
-	if dryRun {
-		return nil
+	if err := runSteps(steps, dryRun, stdout); err != nil || dryRun {
+		return err
 	}
 	_, err = fmt.Fprintln(stdout, "git-age: uninstalled Git integration")
 	return err

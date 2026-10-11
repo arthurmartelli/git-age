@@ -8,20 +8,16 @@ import (
 	"fmt"
 	"golang.org/x/crypto/ssh"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
-func configValues(directory, key string) ([]string, error) {
-	args := []string{"-C", directory, "config", "--null"}
-	if key == "age.keyFile" {
-		args = append(args, "--path")
-	}
-	args = append(args, "--get-all", key)
-	output, err := exec.Command("git", args...).Output()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+// configValues returns every value of key, where an empty value clears
+// those before it. Flags such as --path or --bool convert the values.
+func configValues(directory, key string, flags ...string) ([]string, error) {
+	args := append(append([]string{"config", "--null"}, flags...), "--get-all", key)
+	output, err := git(directory, args...)
+	if exitCode(err, 1) {
 		return nil, nil
 	}
 	if err != nil {
@@ -44,7 +40,7 @@ func loadIdentities(directory, root string, paths []string) ([]age.Identity, []s
 	}
 	if len(paths) == 0 {
 		var err error
-		paths, err = configValues(directory, "age.keyFile")
+		paths, err = configValues(directory, "age.keyFile", "--path")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -58,14 +54,12 @@ func loadIdentities(directory, root string, paths []string) ([]age.Identity, []s
 	var identities []age.Identity
 	var recipients []string
 	for _, path := range paths {
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(directory, path)
-		}
+		path = absolutePath(directory, path)
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil, nil, err
 		}
-		if contentState(content) == "LOCKED" || bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
+		if contentState(content) == Locked || bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
 			return nil, nil, fmt.Errorf("%s: encrypted age identity files are not supported; use an unencrypted identity file", path)
 		}
 		if bytes.HasPrefix(content, []byte("-----BEGIN ENCRYPTED PRIVATE KEY-----")) {

@@ -45,17 +45,17 @@ func TestClean(t *testing.T) {
 			case "index preferred":
 				want = encryptUnlockFixture(t, identity, string(plaintext), false)
 				writeStatusFile(t, directory, path, string(want))
-				cleanGit(t, directory, "add", path)
+				runGit(t, directory, "add", path)
 			case "HEAD fallback":
 				writeStatusFile(t, directory, path, "staged edit")
-				cleanGit(t, directory, "add", path)
+				runGit(t, directory, "add", path)
 			case "missing working file":
 				if err := os.Remove(filepath.Join(directory, path)); err != nil {
 					t.Fatal(err)
 				}
 			case "subdirectory":
-				cleanGit(t, directory, "mv", path, "sub/nested.env")
-				cleanGit(t, directory, "commit", "-qm", "move secret")
+				runGit(t, directory, "mv", path, "sub/nested.env")
+				runGit(t, directory, "commit", "-qm", "move secret")
 				workingDirectory, path = filepath.Join(directory, "sub"), "nested.env"
 			case "no identity":
 				if err := os.Remove(filepath.Join(directory, ".gitage.key")); err != nil {
@@ -75,8 +75,8 @@ func TestClean(t *testing.T) {
 				corrupt := bytes.Clone(ciphertext)
 				corrupt[len(corrupt)-1] ^= 1
 				writeStatusFile(t, directory, path, string(corrupt))
-				cleanGit(t, directory, "add", path)
-				cleanGit(t, directory, "commit", "-qm", "corrupt ciphertext")
+				runGit(t, directory, "add", path)
+				runGit(t, directory, "commit", "-qm", "corrupt ciphertext")
 				passThrough = true
 			case "unprotected", "negated", "missing rules", "malformed rules":
 				if scenario == "missing rules" {
@@ -91,8 +91,8 @@ func TestClean(t *testing.T) {
 						rules = "[unknown]\n"
 					}
 					writeStatusFile(t, directory, ".gitage", rules)
-					cleanGit(t, directory, "add", ".gitage")
-					cleanGit(t, directory, "commit", "-qm", "change protection")
+					runGit(t, directory, "add", ".gitage")
+					runGit(t, directory, "commit", "-qm", "change protection")
 				}
 				passThrough = true
 			case "unrelated malformed rules":
@@ -101,10 +101,10 @@ func TestClean(t *testing.T) {
 				extra := rekeyIdentity(t)
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+extra.Recipient().String()+"\n")
 				if scenario != "recipient edit" {
-					cleanGit(t, directory, "add", ".gitage")
+					runGit(t, directory, "add", ".gitage")
 				}
 				if scenario == "committed recipient edit" {
-					cleanGit(t, directory, "commit", "-qm", "add recipient")
+					runGit(t, directory, "commit", "-qm", "add recipient")
 				}
 				passThrough = true
 			case "external recipients":
@@ -180,12 +180,12 @@ func TestCleanConflict(t *testing.T) {
 				writeStatusFile(t, directory, ".gitage", "[unknown]\n")
 				wantError = true
 			case "trust refusal":
-				cleanGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
+				runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 				wantError = true
 			}
 			cleanConflictIndex(t, directory, path, base, ours, theirs)
 			writeStatusFile(t, directory, path, string(input))
-			indexBefore := cleanGit(t, directory, "ls-files", "--stage", "-z")
+			indexBefore := runGit(t, directory, "ls-files", "--stage", "-z")
 			output, stderr, err := runClean(directory, path, input)
 			if wantError {
 				if err == nil || !strings.Contains(err.Error(), "Refusing to stage it as plaintext") || len(output) != 0 {
@@ -208,7 +208,7 @@ func TestCleanConflict(t *testing.T) {
 				}
 			}
 			after, err := os.ReadFile(filepath.Join(directory, path))
-			if err != nil || !bytes.Equal(after, input) || !bytes.Equal(indexBefore, cleanGit(t, directory, "ls-files", "--stage", "-z")) {
+			if err != nil || !bytes.Equal(after, input) || !bytes.Equal(indexBefore, runGit(t, directory, "ls-files", "--stage", "-z")) {
 				t.Fatalf("clean changed the working file or index: %v", err)
 			}
 		})
@@ -255,48 +255,48 @@ func TestCleanGitFilter(t *testing.T) {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
 	writeStatusFile(t, directory, ".gitattributes", "*.env filter=age\n")
-	cleanGit(t, directory, "config", "filter.age.clean", "\""+filepath.ToSlash(executable)+"\" clean %f")
-	cleanGit(t, directory, "config", "filter.age.smudge", "cat")
-	cleanGit(t, directory, "config", "filter.age.required", "true")
-	cleanGit(t, directory, "add", ".gitattributes")
-	cleanGit(t, directory, "commit", "-qm", "enable filter")
+	runGit(t, directory, "config", "filter.age.clean", "\""+filepath.ToSlash(executable)+"\" clean %f")
+	runGit(t, directory, "config", "filter.age.smudge", "cat")
+	runGit(t, directory, "config", "filter.age.required", "true")
+	runGit(t, directory, "add", ".gitattributes")
+	runGit(t, directory, "commit", "-qm", "enable filter")
 	writeStatusFile(t, directory, "secret.env", "original\n")
 	// Clear the encrypted file's cached size so Git asks the filter to compare.
-	oid := strings.TrimSpace(string(cleanGit(t, directory, "rev-parse", "HEAD:secret.env")))
-	cleanGit(t, directory, "update-index", "--cacheinfo", "100644,"+oid+",secret.env")
-	if output := cleanGit(t, directory, "status", "--porcelain", "--", "secret.env"); len(output) != 0 {
+	oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD:secret.env")))
+	runGit(t, directory, "update-index", "--cacheinfo", "100644,"+oid+",secret.env")
+	if output := runGit(t, directory, "status", "--porcelain", "--", "secret.env"); len(output) != 0 {
 		t.Fatalf("unchanged unlocked file shows as modified: %s", output)
 	}
-	cleanGit(t, directory, "add", "secret.env")
-	if output := cleanGit(t, directory, "show", ":secret.env"); !bytes.Equal(output, ciphertext) {
+	runGit(t, directory, "add", "secret.env")
+	if output := runGit(t, directory, "show", ":secret.env"); !bytes.Equal(output, ciphertext) {
 		t.Fatal("git add did not reuse ciphertext")
 	}
 	writeStatusFile(t, directory, "secret.env", "changed\n")
-	if output := cleanGit(t, directory, "status", "--porcelain", "--", "secret.env"); string(output) != " M secret.env\n" {
+	if output := runGit(t, directory, "status", "--porcelain", "--", "secret.env"); string(output) != " M secret.env\n" {
 		t.Fatalf("edit not visible: %q", output)
 	}
-	cleanGit(t, directory, "add", "secret.env")
-	if output := cleanGit(t, directory, "show", ":secret.env"); string(output) != "changed\n" {
+	runGit(t, directory, "add", "secret.env")
+	if output := runGit(t, directory, "show", ":secret.env"); string(output) != "changed\n" {
 		t.Fatal("ordinary edits must pass through to the commit hook")
 	}
 	for _, refusing := range []bool{true, false} {
 		cleanConflictIndex(t, directory, "secret.env", ciphertext, ciphertext, ciphertext)
 		writeStatusFile(t, directory, "secret.env", "resolved\n")
 		if refusing {
-			cleanGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
+			runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 		} else {
-			cleanGit(t, directory, "config", "--unset", "age.trustedRecipients")
+			runGit(t, directory, "config", "--unset", "age.trustedRecipients")
 		}
 		output, err := exec.Command("git", "-C", directory, "add", "secret.env").CombinedOutput()
 		if refusing {
-			if err == nil || !strings.Contains(string(output), "Refusing to stage it as plaintext") || len(cleanGit(t, directory, "ls-files", "-u", "--", "secret.env")) == 0 {
+			if err == nil || !strings.Contains(string(output), "Refusing to stage it as plaintext") || len(runGit(t, directory, "ls-files", "-u", "--", "secret.env")) == 0 {
 				t.Fatalf("failed encryption did not keep conflict unmerged: %v, %s", err, output)
 			}
 		} else {
 			if err != nil {
 				t.Fatalf("stage resolution: %v, %s", err, output)
 			}
-			assertCleanDecrypts(t, cleanGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))
+			assertCleanDecrypts(t, runGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))
 		}
 	}
 }
@@ -311,26 +311,17 @@ func cleanFixture(t *testing.T, plaintext []byte, armored bool) (string, *age.X2
 	writeStatusFile(t, directory, "sub/.keep", "")
 	ciphertext := encryptUnlockFixture(t, identity, string(plaintext), armored)
 	writeStatusFile(t, directory, "secret.env", string(ciphertext))
-	cleanGit(t, directory, "config", "user.name", "Test")
-	cleanGit(t, directory, "config", "user.email", "test@example.com")
-	cleanGit(t, directory, "config", "commit.gpgsign", "false")
-	cleanGit(t, directory, "add", ".gitage", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "encrypted")
+	runGit(t, directory, "config", "user.name", "Test")
+	runGit(t, directory, "config", "user.email", "test@example.com")
+	runGit(t, directory, "config", "commit.gpgsign", "false")
+	runGit(t, directory, "add", ".gitage", "secret.env")
+	runGit(t, directory, "commit", "-qm", "encrypted")
 	return directory, identity, ciphertext
-}
-
-func cleanGit(t *testing.T, directory string, args ...string) []byte {
-	t.Helper()
-	output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, output)
-	}
-	return output
 }
 
 func cleanConflictIndex(t *testing.T, directory, path string, sides ...[]byte) {
 	t.Helper()
-	cleanGit(t, directory, "update-index", "--force-remove", "--", path)
+	runGit(t, directory, "update-index", "--force-remove", "--", path)
 	var records strings.Builder
 	for i, content := range sides {
 		command := exec.Command("git", "-C", directory, "hash-object", "-w", "--stdin")

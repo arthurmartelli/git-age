@@ -9,15 +9,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
+// State is whether a protected file's content is encrypted.
+type State string
+
+const (
+	Locked   State = "LOCKED"
+	Unlocked State = "UNLOCKED"
+	Unknown  State = "UNKNOWN"
+)
+
 type ProtectedFile struct {
 	Path     string
-	State    string
+	State    State
 	RuleFile string
 	RuleLine int
 	Pattern  string
@@ -26,11 +35,7 @@ type ProtectedFile struct {
 var ErrNoRules = errors.New("no .gitage files found")
 
 func ProtectedFiles(directory string, paths []string) ([]ProtectedFile, error) {
-	directory, err := filepath.Abs(directory)
-	if err != nil {
-		return nil, err
-	}
-	directory, err = filepath.EvalSymlinks(directory)
+	directory, root, inGit, err := resolveDirectory(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -41,57 +46,40 @@ func ProtectedFiles(directory string, paths []string) ([]ProtectedFile, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("not a directory: %s", directory)
 	}
-	root, err := gitRoot(directory)
-	if err != nil {
-		return nil, err
-	}
-	inGit := root != ""
-	if !inGit {
-		root = directory
-	}
 	candidates, err := regularFiles(directory, inGit)
 	if err != nil {
 		return nil, err
 	}
-	rules := []string{}
-	for _, path := range candidates {
-		if filepath.Base(path) == ".gitage" {
-			rules = append(rules, path)
-		}
+	rules, err := readRules(candidates)
+	if err != nil {
+		return nil, err
 	}
-	for parent := filepath.Dir(directory); inGit && inside(root, parent); parent = filepath.Dir(parent) {
-		path := filepath.Join(parent, ".gitage")
-		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
-			rules = append(rules, path)
-		}
-		if parent == root {
-			break
+	if inGit {
+		for _, parent := range ancestorDirs(root, filepath.Dir(directory)) {
+			path := filepath.Join(parent, ".gitage")
+			if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+				if rules[path], err = os.ReadFile(path); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if len(rules) == 0 {
 		return nil, fmt.Errorf("%w under %s", ErrNoRules, root)
 	}
-	ruleContents := make(map[string][]byte, len(rules))
-	for _, path := range rules {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		ruleContents[path] = content
-	}
-	files, err := matchProtectedFiles(directory, root, candidates, ruleContents, ruleIgnoreCase(root, inGit))
+	files, err := matchProtectedFiles(directory, root, candidates, rules, ruleIgnoreCase(root, inGit))
 	if err != nil {
 		return nil, err
 	}
 	for i := range files {
-		files[i].State = fileState(filepath.Join(directory, filepath.FromSlash(files[i].Path)))
+		files[i].State = fileState(nativePath(directory, files[i].Path))
 	}
 	return selectFiles(directory, files, paths)
 }
 
 func ruleIgnoreCase(root string, inGit bool) string {
 	if inGit {
-		if output, err := exec.Command("git", "-C", root, "config", "--bool", "core.ignoreCase").Output(); err == nil {
+		if output, err := git(root, "config", "--bool", "core.ignoreCase"); err == nil {
 			return strings.TrimSpace(string(output))
 		}
 	}
@@ -111,7 +99,7 @@ func matchProtectedFiles(directory, root string, candidates []string, rules map[
 		return nil, fmt.Errorf("initialize rule matcher: %w: %s", err, output)
 	}
 	for path, content := range rules {
-		patterns, err := filePatterns(path, content)
+		patterns, _, err := parseRules(path, content)
 		if err != nil {
 			return nil, err
 		}
@@ -144,8 +132,7 @@ func matchProtectedFiles(directory, root string, candidates []string, rules map[
 	cmd.Env = ruleMatcherEnvironment()
 	cmd.Stdin = &input
 	output, err := cmd.Output()
-	var exit *exec.ExitError
-	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+	if err != nil && !exitCode(err, 1) {
 		return nil, fmt.Errorf("match .gitage rules: %w", err)
 	}
 	records := bytes.Split(bytes.TrimSuffix(output, []byte{0}), []byte{0})
@@ -155,15 +142,15 @@ func matchProtectedFiles(directory, root string, candidates []string, rules map[
 		if strings.HasPrefix(pattern, "!") {
 			continue
 		}
-		path := filepath.Join(root, filepath.FromSlash(string(records[i+3])))
+		path := nativePath(root, string(records[i+3]))
 		relative, _ := filepath.Rel(directory, path)
-		rule := filepath.Join(root, filepath.FromSlash(string(records[i])))
+		rule := nativePath(root, string(records[i]))
 		rule = filepath.Join(filepath.Dir(rule), ".gitage")
 		ruleRelative, _ := filepath.Rel(directory, rule)
 		line, _ := strconv.Atoi(string(records[i+1]))
 		files = append(files, ProtectedFile{filepath.ToSlash(relative), "", filepath.ToSlash(ruleRelative), line, pattern})
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	slices.SortFunc(files, func(a, b ProtectedFile) int { return strings.Compare(a.Path, b.Path) })
 	return files, nil
 }
 
@@ -189,7 +176,7 @@ func ruleMatcherEnvironment() []string {
 func regularFiles(directory string, inGit bool) ([]string, error) {
 	var candidates []string
 	if inGit {
-		output, err := exec.Command("git", "-C", directory, "ls-files", "--cached", "--others", "--exclude-standard", "-z").Output()
+		output, err := git(directory, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
 		if err != nil {
 			return nil, err
 		}
@@ -228,11 +215,6 @@ func regularFiles(directory string, inGit bool) ([]string, error) {
 		}
 	}
 	return files, nil
-}
-
-func filePatterns(path string, content []byte) ([]byte, error) {
-	patterns, _, err := parseRules(path, content)
-	return patterns, err
 }
 
 func parseRules(path string, content []byte) ([]byte, []string, error) {
@@ -359,25 +341,35 @@ func validatePattern(pattern string) error {
 	return nil
 }
 
-func fileState(path string) string {
+// CheckKnown fails if any file has an unknown state.
+func CheckKnown(files []ProtectedFile) error {
+	for _, file := range files {
+		if file.State == Unknown {
+			return fmt.Errorf("cannot determine file state: %s", file.Path)
+		}
+	}
+	return nil
+}
+
+func fileState(path string) State {
 	file, err := os.Open(path)
 	if err != nil {
-		return "UNKNOWN"
+		return Unknown
 	}
 	defer file.Close()
 	header := make([]byte, len("-----BEGIN AGE ENCRYPTED FILE-----\n"))
 	n, err := io.ReadFull(file, header)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		return "UNKNOWN"
+		return Unknown
 	}
 	return contentState(header[:n])
 }
 
-func contentState(content []byte) string {
+func contentState(content []byte) State {
 	if bytes.HasPrefix(content, []byte("age-encryption.org/v1\n")) || bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----\n")) {
-		return "LOCKED"
+		return Locked
 	}
-	return "UNLOCKED"
+	return Unlocked
 }
 
 func inside(directory, path string) bool {
@@ -391,16 +383,13 @@ func selectFiles(directory string, files []ProtectedFile, paths []string) ([]Pro
 	}
 	selected := map[string]bool{}
 	for _, path := range paths {
-		target := path
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(directory, target)
-		}
+		target := absolutePath(directory, path)
 		if !inside(directory, target) {
 			return nil, fmt.Errorf("%s: outside %s", path, directory)
 		}
 		matched := false
 		for _, file := range files {
-			if inside(target, filepath.Join(directory, filepath.FromSlash(file.Path))) {
+			if inside(target, nativePath(directory, file.Path)) {
 				selected[file.Path] = true
 				matched = true
 			}

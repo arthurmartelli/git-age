@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/arthurmartelli/git-age/internal/repository"
 	"github.com/spf13/cobra"
@@ -32,7 +31,7 @@ func newMergeCommand(options *globalOptions) *cobra.Command {
 			}
 			conflicted, err := repository.Merge(options.directory, path, args[0], args[1], args[2], markerSize)
 			if err != nil {
-				if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "git-age: cannot merge %s: %s; keeping our version\n", quoteStatusPath(path), strings.SplitN(err.Error(), "\n", 2)[0]); writeErr != nil {
+				if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "git-age: cannot merge %s: %s; keeping our version\n", quoteStatusPath(path), repository.FirstLine(err)); writeErr != nil {
 					return writeErr
 				}
 				return errMergeConflict

@@ -24,16 +24,15 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 			var err error
 			if cached {
 				result, err := repository.CheckIndex(options.directory)
-				if len(result.RemovedRules) != 0 && !allowCheck("GIT_AGE_ALLOW_REMOVE") {
-					return reportCheckFailure(cmd, "refusing to commit the removal of .gitage files", result.RemovedRules,
-						"Restore them with:\n\n  git restore --staged --worktree -- "+shellPaths(result.RemovedRules)+"\n\nTo allow removal, set GIT_AGE_ALLOW_REMOVE=1.")
+				if err := refuseRemovedRules(cmd, result.RemovedRules, "To allow removal, set GIT_AGE_ALLOW_REMOVE=1."); err != nil {
+					return err
 				}
 				if err != nil {
 					return err
 				}
-				if len(result.PrivateKeys) != 0 && !allowCheck("GIT_AGE_ALLOW_PRIVATE_KEYS") {
-					return reportCheckFailure(cmd, "refusing to commit private age keys", result.PrivateKeys,
-						"Unstage them with:\n\n  git restore --staged -- "+shellPaths(result.PrivateKeys)+"\n\nTo allow them, set GIT_AGE_ALLOW_PRIVATE_KEYS=1.")
+				if err := refuseUnless(cmd, "GIT_AGE_ALLOW_PRIVATE_KEYS", result.PrivateKeys, "refusing to commit private age keys",
+					"Unstage them with:\n\n  git restore --staged -- "+shellPaths(result.PrivateKeys)+"\n\nTo allow them, set GIT_AGE_ALLOW_PRIVATE_KEYS=1."); err != nil {
+					return err
 				}
 				files = result.Files
 			} else {
@@ -46,9 +45,9 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 			var unknown, unlocked []string
 			for _, file := range files {
 				switch file.State {
-				case "UNKNOWN":
+				case repository.Unknown:
 					unknown = append(unknown, file.Path)
-				case "UNLOCKED":
+				case repository.Unlocked:
 					unlocked = append(unlocked, file.Path)
 				}
 			}
@@ -91,12 +90,22 @@ func reportCheckFailure(cmd *cobra.Command, message string, paths []string, advi
 	return errCheckFailed
 }
 
-func allowCheck(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
+// refuseUnless reports paths as a failure unless the environment variable allows them.
+func refuseUnless(cmd *cobra.Command, environment string, paths []string, message, advice string) error {
+	if len(paths) == 0 || allowCheck(environment) {
+		return nil
 	}
-	return false
+	return reportCheckFailure(cmd, message, paths, advice)
+}
+
+func refuseRemovedRules(cmd *cobra.Command, paths []string, advice string) error {
+	return refuseUnless(cmd, "GIT_AGE_ALLOW_REMOVE", paths, "refusing to commit the removal of .gitage files",
+		"Restore them with:\n\n  git restore --staged --worktree -- "+shellPaths(paths)+"\n\n"+advice)
+}
+
+func allowCheck(name string) bool {
+	allowed, err := repository.ParseBool(os.Getenv(name))
+	return err == nil && allowed
 }
 
 func shellPaths(paths []string) string {

@@ -41,7 +41,7 @@ func TestKeygen(t *testing.T) {
 				args = []string{"--no-exclude"}
 			}
 
-			output, err := runKeygen(workingDirectory, args...)
+			output, err := runCommand(workingDirectory, "keygen", args...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -107,7 +107,7 @@ func TestKeygenRefusesOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := runKeygen(directory)
+	_, err := runCommand(directory, "keygen")
 	if err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
 		t.Errorf("expected overwrite refusal, got %v", err)
 	}
@@ -123,7 +123,7 @@ func TestKeygenRefusesOverwrite(t *testing.T) {
 
 func TestKeygenMissingOutputDirectory(t *testing.T) {
 	directory := t.TempDir()
-	_, err := runKeygen(directory, "-o", "missing/key")
+	_, err := runCommand(directory, "keygen", "-o", "missing/key")
 	if err == nil || !strings.Contains(err.Error(), "output directory does not exist") {
 		t.Errorf("expected missing output directory error, got %v", err)
 	}
@@ -142,7 +142,7 @@ func TestKeygenDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := runKeygen(directory, "--dry-run")
+	output, err := runCommand(directory, "keygen", "--dry-run")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestKeygenDirectoryAlias(t *testing.T) {
 	if err := os.Symlink(directory, alias); err != nil {
 		t.Skipf("directory symlinks unavailable: %v", err)
 	}
-	if _, err := runKeygen(alias, "-o", "custom.key"); err != nil {
+	if _, err := runCommand(alias, "keygen", "-o", "custom.key"); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("git", "-C", directory, "check-ignore", "-q", "custom.key")
@@ -197,15 +197,4 @@ func initKeygenRepo(t *testing.T, directory string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, output)
 	}
-}
-
-func runKeygen(directory string, args ...string) (string, error) {
-	var output bytes.Buffer
-	root := newRootCommand()
-	root.SetOut(&output)
-	root.SetErr(&output)
-	root.SetArgs(append([]string{"-C", directory, "keygen"}, args...))
-
-	err := root.Execute()
-	return output.String(), err
 }

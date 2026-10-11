@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 )
 
 type replacement struct {
@@ -71,17 +69,18 @@ func forgetStat(replacements []replacement) error {
 		byRoot[root] = append(byRoot[root], filepath.ToSlash(relative))
 	}
 	for root, paths := range byRoot {
-		args := append([]string{"--literal-pathspecs", "-C", root, "ls-files", "--stage", "-z", "--"}, paths...)
-		output, err := exec.Command("git", args...).Output()
+		output, err := git(root, append([]string{"--literal-pathspecs", "ls-files", "--stage", "-z", "--"}, paths...)...)
+		if err != nil {
+			return err
+		}
+		staged, err := stageEntries(output)
 		if err != nil {
 			return err
 		}
 		var entries bytes.Buffer
-		for _, record := range bytes.Split(output, []byte{0}) {
-			header, path, ok := strings.Cut(string(record), "\t")
-			fields := strings.Fields(header)
-			if ok && len(fields) == 3 && fields[2] == "0" && (fields[0] == "100644" || fields[0] == "100755") {
-				fmt.Fprintf(&entries, "%s %s\t%s%c", fields[0], fields[1], path, 0)
+		for _, entry := range staged {
+			if entry.stage == "0" && regularMode(entry.mode) {
+				fmt.Fprintf(&entries, "%s %s\t%s%c", entry.mode, entry.oid, entry.path, 0)
 			}
 		}
 		if entries.Len() == 0 {
@@ -89,10 +88,8 @@ func forgetStat(replacements []replacement) error {
 		}
 		// A size change can bypass Git's clean filter. Rewriting each stage-zero
 		// entry with the same blob clears its stat cache without staging edits.
-		command := exec.Command("git", "-C", root, "update-index", "-z", "--index-info")
-		command.Stdin = &entries
-		if output, err := command.CombinedOutput(); err != nil {
-			return fmt.Errorf("files changed but Git stat cache refresh failed: %w: %s", err, output)
+		if _, err := gitWithInput(root, entries.Bytes(), "update-index", "-z", "--index-info"); err != nil {
+			return fmt.Errorf("files changed but Git stat cache refresh failed: %w", err)
 		}
 	}
 	return nil

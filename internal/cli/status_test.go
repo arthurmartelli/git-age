@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,7 +38,7 @@ func TestStatus(t *testing.T) {
 				{"sorted selection", directory, []string{"--porcelain", "sub/c.env", "a.env", "a.env"}, "U. a.env\nL. sub/c.env\n"},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					got, err := runStatus(tc.directory, tc.args...)
+					got, err := runCommand(tc.directory, "status", tc.args...)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -49,7 +48,7 @@ func TestStatus(t *testing.T) {
 				})
 			}
 			if inGit {
-				got, err := runStatus(filepath.Join(directory, "sub"), "--porcelain")
+				got, err := runCommand(filepath.Join(directory, "sub"), "status", "--porcelain")
 				if err != nil || got != "L. b.env\nL. c.env\n" {
 					t.Fatalf("subdirectory: %q, %v", got, err)
 				}
@@ -67,7 +66,7 @@ func TestStatusRules(t *testing.T) {
 	for _, name := range []string{"a.env", "ignored.env", "sub/public.env", "sub/private.txt", "secrets/public.txt", "secrets/.gitage.key"} {
 		writeStatusFile(t, directory, name, "plaintext")
 	}
-	got, err := runStatus(directory, "--porcelain")
+	got, err := runCommand(directory, "status", "--porcelain")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +77,7 @@ func TestStatusRules(t *testing.T) {
 
 func TestStatusErrors(t *testing.T) {
 	directory := t.TempDir()
-	if _, err := runStatus(directory); err == nil || !strings.Contains(err.Error(), "no .gitage files") {
+	if _, err := runCommand(directory, "status"); err == nil || !strings.Contains(err.Error(), "no .gitage files") {
 		t.Fatalf("missing rules: %v", err)
 	}
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
@@ -89,13 +88,13 @@ func TestStatusErrors(t *testing.T) {
 		{".", "no file in it is protected"},
 		{"../outside", "outside"},
 	} {
-		_, err := runStatus(directory, tc.path)
+		_, err := runCommand(directory, "status", tc.path)
 		if err == nil || !strings.Contains(err.Error(), tc.message) {
 			t.Errorf("%s: %v", tc.path, err)
 		}
 	}
 	writeStatusFile(t, directory, ".gitage", "[file]\n*.env\n")
-	if _, err := runStatus(directory); err == nil || !strings.Contains(err.Error(), "unknown section") {
+	if _, err := runCommand(directory, "status"); err == nil || !strings.Contains(err.Error(), "unknown section") {
 		t.Fatalf("invalid rules: %v", err)
 	}
 }
@@ -107,11 +106,11 @@ func TestStatusQuotedPaths(t *testing.T) {
 	directory := t.TempDir()
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 	writeStatusFile(t, directory, "a\tb.env", "plaintext")
-	got, err := runStatus(directory, "--porcelain")
+	got, err := runCommand(directory, "status", "--porcelain")
 	if err != nil || got != "U. \"a\\tb.env\"\n" {
 		t.Fatalf("quoted: %q, %v", got, err)
 	}
-	got, err = runStatus(directory, "-z")
+	got, err = runCommand(directory, "status", "-z")
 	if err != nil || got != "U. a\tb.env\x00" {
 		t.Fatalf("NUL: %q, %v", got, err)
 	}
@@ -148,7 +147,7 @@ func TestStatusReadOnly(t *testing.T) {
 		return result
 	}
 	before := snapshot()
-	if _, err := runStatus(directory); err != nil {
+	if _, err := runCommand(directory, "status"); err != nil {
 		t.Fatal(err)
 	}
 	after := snapshot()
@@ -171,14 +170,4 @@ func writeStatusFile(t *testing.T, directory, name, content string) {
 	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func runStatus(directory string, args ...string) (string, error) {
-	var output bytes.Buffer
-	root := newRootCommand()
-	root.SetOut(&output)
-	root.SetErr(&output)
-	root.SetArgs(append([]string{"-C", directory, "status"}, args...))
-	err := root.Execute()
-	return output.String(), err
 }

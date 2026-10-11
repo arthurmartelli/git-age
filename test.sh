@@ -786,7 +786,7 @@ section "completion"
 check "the bash completion script parses" 'bash -n <(git-age completion bash)'
 ! command -v zsh >/dev/null || check "so does zsh's" 'git-age completion zsh | zsh -n'
 ! command -v fish >/dev/null || check "so does fish's" 'git-age completion fish | fish --no-config -n'
-refuse "an unknown shell is refused" "invalid choice: 'tcsh'" git-age completion tcsh
+refuse "an unknown shell is refused" 'invalid argument "tcsh"' git-age completion tcsh
 bash_complete() {
   bash -c 'source <(git-age completion bash)
     COMP_WORDS=("$@") COMP_CWORD=$(($# - 1)) words=("$@") cword=$(($# - 1)) __git_cmd_idx=1

@@ -1,9 +1,7 @@
 package cli
 
 import (
-	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/spf13/pflag"
 )
@@ -18,21 +16,14 @@ func identityFlags(flags *pflag.FlagSet, identities *[]string) {
 
 func booleanFlags(flags *pflag.FlagSet, name string, target *bool, help string) {
 	flags.BoolVar(target, name, true, help)
-
-	flags.BoolFunc("no-"+name, "disable: "+help, func(value string) error {
-		b, err := strconv.ParseBool(value)
-		*target = !b
-
-		return err
-	})
+	boolFlag(flags, "no-"+name, "disable: "+help, func(enabled bool) { *target = enabled }, true)
 }
 
-func choice(value string, choices ...string) error {
-	for _, allowed := range choices {
-		if value == allowed {
-			return nil
-		}
-	}
-
-	return fmt.Errorf("invalid choice: '%s' (choose from %s)", value, strings.Join(choices, ", "))
+// boolFlag calls set with the flag's value, inverted if negated.
+func boolFlag(flags *pflag.FlagSet, name, help string, set func(bool), negated bool) {
+	flags.BoolFunc(name, help, func(value string) error {
+		b, err := strconv.ParseBool(value)
+		set(b != negated)
+		return err
+	})
 }

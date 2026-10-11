@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -12,35 +11,17 @@ import (
 )
 
 func KeyPath(directory, output string) (string, error) {
-	directory, err := filepath.Abs(directory)
+	directory, root, _, err := resolveDirectory(directory)
 	if err != nil {
 		return "", err
 	}
-	info, err := os.Stat(directory)
-	if err != nil {
-		return "", err
-	}
-	if !info.IsDir() {
+	if info, err := os.Stat(directory); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("not a directory: %s", directory)
 	}
-	directory, err = filepath.EvalSymlinks(directory)
-	if err != nil {
-		return "", err
-	}
-
 	if output == "" {
-		root, err := gitRoot(directory)
-		if err != nil {
-			return "", err
-		}
-		if root != "" {
-			directory = root
-		}
-		output = ".gitage.key"
+		directory, output = root, ".gitage.key"
 	}
-	if !filepath.IsAbs(output) {
-		output = filepath.Join(directory, output)
-	}
+	output = absolutePath(directory, output)
 
 	if _, err := os.Lstat(output); err == nil {
 		return "", fmt.Errorf("refusing to overwrite existing key: %s", output)
@@ -85,20 +66,6 @@ func GenerateKey(path string, exclude bool) (string, error) {
 	return identity.Recipient().String(), nil
 }
 
-func gitRoot(directory string) (string, error) {
-	output, err := exec.Command("git", "-C", directory, "rev-parse", "--show-toplevel").Output()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		return "", nil // A key can also be generated outside a Git worktree.
-	}
-	if err != nil {
-		return "", err
-	}
-
-	root := filepath.FromSlash(strings.TrimSpace(string(output)))
-	return filepath.EvalSymlinks(root)
-}
-
 func excludeKey(path string) error {
 	path, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -119,14 +86,11 @@ func excludeKey(path string) error {
 	escape := strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]", " ", "\\ ")
 	entry := "/" + escape.Replace(filepath.ToSlash(relative))
 
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", "info/exclude").Output()
+	output, err := git(root, "rev-parse", "--git-path", "info/exclude")
 	if err != nil {
 		return err
 	}
-	exclude := strings.TrimSpace(string(output))
-	if !filepath.IsAbs(exclude) {
-		exclude = filepath.Join(root, exclude)
-	}
+	exclude := absolutePath(root, strings.TrimSpace(string(output)))
 
 	content, err := os.ReadFile(exclude)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

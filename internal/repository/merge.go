@@ -14,28 +14,11 @@ import (
 // Merge replaces Git's OURS file only after decryption and merge preparation
 // succeed. Conflicts contain plaintext; clean results use current recipients.
 func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, error) {
-	if markerSize < 1 {
-		return false, fmt.Errorf("conflict marker size must be positive")
-	}
-	directory, err := filepath.Abs(directory)
+	directory, root, inGit, err := resolveDirectory(directory)
 	if err != nil {
 		return false, err
 	}
-	directory, err = filepath.EvalSymlinks(directory)
-	if err != nil {
-		return false, err
-	}
-	root, err := gitRoot(directory)
-	if err != nil {
-		return false, err
-	}
-	inGit := root != ""
-	if !inGit {
-		root = directory
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(directory, path)
-	}
+	path = absolutePath(directory, path)
 	if !inside(root, path) {
 		return false, fmt.Errorf("path is outside %s", root)
 	}
@@ -43,14 +26,12 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 	contents := make([][]byte, len(inputs))
 	locked := false
 	for i, input := range inputs {
-		if !filepath.IsAbs(input) {
-			inputs[i] = filepath.Join(directory, input)
-		}
+		inputs[i] = absolutePath(directory, input)
 		contents[i], err = os.ReadFile(inputs[i])
 		if err != nil {
 			return false, err
 		}
-		locked = locked || contentState(contents[i]) == "LOCKED"
+		locked = locked || contentState(contents[i]) == Locked
 	}
 	original := contents[1]
 	if locked {
@@ -62,7 +43,7 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 			return false, fmt.Errorf("no identity configured")
 		}
 		for i, content := range contents {
-			if contentState(content) == "LOCKED" {
+			if contentState(content) == Locked {
 				contents[i], err = decryptContent(content, identities)
 				if err != nil {
 					return false, fmt.Errorf("cannot decrypt %s", []string{"base", "ours", "theirs"}[i])
@@ -71,7 +52,7 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 		}
 	}
 	for _, content := range contents {
-		if bytes.Contains(content[:min(len(content), 8000)], []byte{0}) {
+		if isBinary(content) {
 			return false, fmt.Errorf("binary content")
 		}
 	}
@@ -92,29 +73,18 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 				return false, err
 			}
 		}
-		identities, _, baseRecipients, external, err := encryptionKeys(directory, root, nil, nil)
+		keys, err := loadKeys(directory, root, nil, nil, nil)
 		if err != nil {
 			return false, err
 		}
-		values, rules, err := fileRecipients(root, path, baseRecipients)
+		target, err := keys.target(root, path, nil)
 		if err != nil {
 			return false, err
 		}
-		recipients, err := parseRecipients(values)
+		merged, err = keys.encrypt(root, path, target, merged, inGit)
 		if err != nil {
 			return false, err
 		}
-		var encrypted []byte
-		if inGit && !external {
-			encrypted = reusableCiphertext(root, path, rules, merged, identities)
-		}
-		if encrypted == nil {
-			encrypted, err = encryptContent(merged, recipients)
-			if err != nil {
-				return false, err
-			}
-		}
-		merged = encrypted
 	}
 	return conflicted, replaceFiles([]replacement{{inputs[1], original, merged}})
 }

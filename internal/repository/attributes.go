@@ -2,10 +2,7 @@ package repository
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -26,11 +23,7 @@ func RefreshAttributes(directory string) error {
 	if err != nil {
 		return err
 	}
-	installed := false
-	for _, line := range strings.Split(string(existing), "\n") {
-		installed = installed || strings.TrimSuffix(line, "\r") == attributesBegin
-	}
-	if !installed {
+	if !hasLine(existing, attributesBegin) {
 		return nil
 	}
 	options, err := installedDrivers(root)
@@ -55,9 +48,8 @@ func installedDrivers(root string) (InstallOptions, error) {
 	var options InstallOptions
 	// Local driver settings record install's choices; inherited settings must
 	// not reactivate integrations disabled by this repository.
-	output, err := exec.Command("git", "-C", root, "config", "--local", "--null", "--get-regexp", `^(diff\.age\.textconv|merge\.age\.driver|filter\.age\.clean)$`).Output()
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	output, err := git(root, "config", "--local", "--null", "--get-regexp", `^(diff\.age\.textconv|merge\.age\.driver|filter\.age\.clean)$`)
+	if exitCode(err, 1) {
 		return options, nil
 	}
 	if err != nil {
@@ -94,16 +86,17 @@ func renderAttributes(root string, options InstallOptions) ([]byte, error) {
 	if options.Merge {
 		attributes[2] = "merge=age"
 	}
+	rules, err := readRules(paths)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	for _, path := range paths {
-		if filepath.Base(path) != ".gitage" {
+		content, ok := rules[path]
+		if !ok {
 			continue
 		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		patterns, err := filePatterns(path, content)
+		patterns, _, err := parseRules(path, content)
 		if err != nil {
 			return nil, err
 		}

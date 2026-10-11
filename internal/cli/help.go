@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -41,7 +41,7 @@ func newHelpCommand() *cobra.Command {
 						names = append(names, command.Name())
 					}
 				}
-				sort.Strings(names)
+				slices.Sort(names)
 			}
 			return names, cobra.ShellCompDirectiveNoFileComp
 		},

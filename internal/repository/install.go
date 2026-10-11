@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -25,6 +26,38 @@ type installStep struct {
 }
 
 var hookEvents = []string{"pre-commit", "post-commit", "pre-push", "post-checkout", "post-merge", "post-rewrite"}
+
+// HookModes are the pre-commit policies for protected plaintext.
+var HookModes = []string{"interactive", "always-lock", "abort"}
+
+type configSetting struct {
+	key, value string
+	active     bool
+}
+
+// driverSettings lists the local config the Git drivers use. Install sets the
+// active ones and unsets the rest; uninstall unsets all of them.
+func driverSettings(options InstallOptions) []configSetting {
+	return []configSetting{
+		{"diff.age.textconv", "git age textconv", options.Diff},
+		// Cached textconv output could store decrypted secrets in Git's object store.
+		{"diff.age.cachetextconv", "false", true},
+		{"merge.age.name", "git-age: merge decrypted", options.Merge},
+		{"merge.age.driver", "git age merge --path %P --marker-size %L %O %A %B", options.Merge},
+		{"filter.age.clean", "git age clean %f", options.Filter},
+		{"filter.age.smudge", "cat", options.Filter},
+		{"filter.age.required", "true", options.Filter},
+	}
+}
+
+// installConfigKeys lists every local config key install may write.
+func installConfigKeys() []string {
+	keys := []string{"age.hookMode", "age.unlockAfterCommit"}
+	for _, setting := range driverSettings(InstallOptions{}) {
+		keys = append(keys, setting.key)
+	}
+	return keys
+}
 
 func Install(directory string, options InstallOptions, stdout io.Writer) error {
 	root, err := gitRoot(directory)
@@ -98,28 +131,21 @@ func Install(directory string, options InstallOptions, stdout io.Writer) error {
 		steps = append(steps, installStep{description, func() error { return setInstallConfig(root, key, value) }})
 	}
 	if options.Mode != "" {
-		if options.Mode != "interactive" && options.Mode != "always-lock" && options.Mode != "abort" {
-			return fmt.Errorf("invalid hook mode: %s", options.Mode)
+		if err := ValidateHookMode(options.Mode); err != nil {
+			return err
 		}
 		config("age.hookMode", options.Mode)
 	}
 	if options.UnlockAfterCommit != nil {
 		config("age.unlockAfterCommit", strconv.FormatBool(*options.UnlockAfterCommit))
 	}
-	setting := func(key, value string, active bool) {
-		if !active {
-			value = ""
+	for _, setting := range driverSettings(options) {
+		if setting.active {
+			config(setting.key, setting.value)
+		} else {
+			config(setting.key, "")
 		}
-		config(key, value)
 	}
-	setting("diff.age.textconv", "git age textconv", options.Diff)
-	// Cached textconv output could store decrypted secrets in Git's object store.
-	config("diff.age.cachetextconv", "false")
-	setting("merge.age.name", "git-age: merge decrypted", options.Merge)
-	setting("merge.age.driver", "git age merge --path %P --marker-size %L %O %A %B", options.Merge)
-	setting("filter.age.clean", "git age clean %f", options.Filter)
-	setting("filter.age.smudge", "cat", options.Filter)
-	setting("filter.age.required", "true", options.Filter)
 	description := "write git-age patterns to " + attributes
 	if !enabled {
 		description = "remove git-age patterns from " + attributes
@@ -130,36 +156,89 @@ func Install(directory string, options InstallOptions, stdout io.Writer) error {
 		}
 		return writeInstallFile(attributes, updated, mode)
 	}})
-	for _, step := range steps {
-		if options.DryRun {
-			if _, err := fmt.Fprintln(stdout, "would "+step.description); err != nil {
-				return err
-			}
-		} else {
-			if err := step.apply(); err != nil {
-				return fmt.Errorf("%s: %w", step.description, err)
-			}
-		}
-	}
-	if options.DryRun {
-		return nil
+	if err := runSteps(steps, options.DryRun, stdout); err != nil || options.DryRun {
+		return err
 	}
 	_, err = fmt.Fprintf(stdout, "Installed git-age hooks: %s\nPlaintext diffs: %s\nUnchanged unlocked files hidden: %s\nDecrypted merges: %s\n", hooks, installYesNo(options.Diff), installYesNo(options.Filter), installYesNo(options.Merge))
 	return err
 }
 
+// runSteps applies the steps, or only describes them in a dry run.
+func runSteps(steps []installStep, dryRun bool, stdout io.Writer) error {
+	for _, step := range steps {
+		if dryRun {
+			if _, err := fmt.Fprintln(stdout, "would "+step.description); err != nil {
+				return err
+			}
+		} else if err := step.apply(); err != nil {
+			return fmt.Errorf("%s: %w", step.description, err)
+		}
+	}
+	return nil
+}
+
+// HookMode returns GIT_AGE_HOOK_MODE or age.hookMode, by default interactive.
+func HookMode(directory string) (string, error) {
+	value := os.Getenv("GIT_AGE_HOOK_MODE")
+	if value == "" {
+		values, err := configValues(directory, "age.hookMode")
+		if err != nil {
+			return "", err
+		}
+		if len(values) != 0 {
+			value = values[len(values)-1]
+		}
+	}
+	if value == "" {
+		value = "interactive"
+	}
+	return value, ValidateHookMode(value)
+}
+
+func ValidateHookMode(mode string) error {
+	if !slices.Contains(HookModes, mode) {
+		return fmt.Errorf("invalid choice: '%s' (choose from %s)", mode, strings.Join(HookModes, ", "))
+	}
+	return nil
+}
+
+// UnlockAfterCommit returns GIT_AGE_UNLOCK_AFTER_COMMIT or age.unlockAfterCommit.
+func UnlockAfterCommit(directory string) (bool, error) {
+	const environment = "GIT_AGE_UNLOCK_AFTER_COMMIT"
+	value, configured := os.LookupEnv(environment)
+	if !configured {
+		values, err := configValues(directory, "age.unlockAfterCommit", "--bool")
+		if err != nil || len(values) == 0 {
+			return false, err
+		}
+		value = values[len(values)-1]
+	}
+	enabled, err := ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%w for %s", err, environment)
+	}
+	return enabled, nil
+}
+
+// ParseBool accepts the boolean spellings Git accepts in config files.
+func ParseBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("invalid boolean value %q", value)
+}
+
 func gitPath(root, name string) (string, error) {
 	// Git's absolute path format resolves symlinks, hiding them from the
 	// file checks used by install and uninstall. Make the path absolute here.
-	output, err := exec.Command("git", "-C", root, "rev-parse", "--git-path", name).Output()
+	output, err := git(root, "rev-parse", "--git-path", name)
 	if err != nil {
 		return "", err
 	}
-	path := filepath.FromSlash(strings.TrimSuffix(strings.TrimSuffix(string(output), "\n"), "\r"))
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, path)
-	}
-	return path, nil
+	return absolutePath(root, filepath.FromSlash(strings.TrimSuffix(strings.TrimSuffix(string(output), "\n"), "\r"))), nil
 }
 
 func setInstallConfig(root, key, value string) error {
@@ -170,8 +249,7 @@ func setInstallConfig(root, key, value string) error {
 		args = append(args, "--replace-all", key, value)
 	}
 	output, err := exec.Command("git", args...).CombinedOutput()
-	var exit *exec.ExitError
-	if value == "" && errors.As(err, &exit) && exit.ExitCode() == 5 {
+	if value == "" && exitCode(err, 5) {
 		return nil
 	}
 	if err != nil {
@@ -181,12 +259,7 @@ func setInstallConfig(root, key, value string) error {
 }
 
 func managedHook(content []byte, event string) bool {
-	for _, line := range strings.Split(string(content), "\n") {
-		if strings.TrimSuffix(line, "\r") == "# git-age managed "+event+" hook" {
-			return true
-		}
-	}
-	return false
+	return hasLine(content, "# git-age managed "+event+" hook")
 }
 
 func renderHook(event string) string {

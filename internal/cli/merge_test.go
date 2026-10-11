@@ -56,7 +56,7 @@ func TestMerge(t *testing.T) {
 				extra = rekeyIdentity(t)
 				t.Setenv("GIT_AGE_RECIPIENT", extra.Recipient().String())
 			case "diff3":
-				cleanGit(t, directory, "config", "merge.conflictStyle", "diff3")
+				runGit(t, directory, "config", "merge.conflictStyle", "diff3")
 			case "plaintext":
 				for _, name := range []string{".gitage", ".gitage.key"} {
 					if err := os.Remove(filepath.Join(directory, name)); err != nil {
@@ -76,8 +76,8 @@ func TestMerge(t *testing.T) {
 				contents[2] = encryptUnlockFixture(t, identity, oursText, false)
 				want = []byte(oursText)
 				writeStatusFile(t, directory, "secret.env", string(contents[1]))
-				cleanGit(t, directory, "add", "secret.env")
-				cleanGit(t, directory, "commit", "-qm", "ours")
+				runGit(t, directory, "add", "secret.env")
+				runGit(t, directory, "commit", "-qm", "ours")
 			}
 			inputs := mergeInputs(t, workingDirectory, contents)
 			if scenario == "symlink inputs" {
@@ -87,7 +87,7 @@ func TestMerge(t *testing.T) {
 				}
 				inputs = []string{filepath.Join(alias, ".merge/base"), filepath.Join(alias, ".merge/ours"), filepath.Join(alias, ".merge/theirs")}
 			}
-			indexBefore := cleanGit(t, directory, "ls-files", "--stage", "-z")
+			indexBefore := runGit(t, directory, "ls-files", "--stage", "-z")
 			workingBefore, err := os.ReadFile(filepath.Join(directory, "secret.env"))
 			if err != nil {
 				t.Fatal(err)
@@ -148,7 +148,7 @@ func TestMerge(t *testing.T) {
 			}
 			assertMergeInputs(t, inputs, contents, false)
 			workingAfter, err := os.ReadFile(filepath.Join(directory, "secret.env"))
-			if err != nil || !bytes.Equal(workingBefore, workingAfter) || !bytes.Equal(indexBefore, cleanGit(t, directory, "ls-files", "--stage", "-z")) {
+			if err != nil || !bytes.Equal(workingBefore, workingAfter) || !bytes.Equal(indexBefore, runGit(t, directory, "ls-files", "--stage", "-z")) {
 				t.Fatal("driver changed the working file or index directly")
 			}
 			entries, err := os.ReadDir(temporary)
@@ -200,11 +200,11 @@ func TestMergeRefusesWithoutChangingOurs(t *testing.T) {
 			case "invalid recipients":
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\nage1invalid\n")
 			case "trust refusal":
-				cleanGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
+				runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 			case "outside repository":
 				path = filepath.Join(t.TempDir(), "secret.env")
 			case "merge-file failure":
-				cleanGit(t, directory, "config", "merge.conflictStyle", "invalid")
+				runGit(t, directory, "config", "merge.conflictStyle", "invalid")
 			}
 			inputs := mergeInputs(t, directory, contents)
 			if scenario == "missing input" {
@@ -276,14 +276,14 @@ func TestMergeGitDriver(t *testing.T) {
 			directory, identity, _ := cleanFixture(t, []byte("A=1\nB=1\nC=1\n"), false)
 			program := "\"" + filepath.ToSlash(executable) + "\""
 			writeStatusFile(t, directory, ".gitattributes", "*.env merge=age filter=age conflict-marker-size=11\n")
-			cleanGit(t, directory, "config", "merge.age.driver", program+" merge %O %A %B --path %P --marker-size %L")
-			cleanGit(t, directory, "config", "filter.age.clean", program+" clean %f")
-			cleanGit(t, directory, "config", "filter.age.smudge", "cat")
-			cleanGit(t, directory, "config", "filter.age.required", "true")
-			cleanGit(t, directory, "add", ".gitattributes")
-			cleanGit(t, directory, "commit", "-qm", "driver")
-			cleanGit(t, directory, "branch", "ours")
-			cleanGit(t, directory, "checkout", "-qb", "theirs")
+			runGit(t, directory, "config", "merge.age.driver", program+" merge %O %A %B --path %P --marker-size %L")
+			runGit(t, directory, "config", "filter.age.clean", program+" clean %f")
+			runGit(t, directory, "config", "filter.age.smudge", "cat")
+			runGit(t, directory, "config", "filter.age.required", "true")
+			runGit(t, directory, "add", ".gitattributes")
+			runGit(t, directory, "commit", "-qm", "driver")
+			runGit(t, directory, "branch", "ours")
+			runGit(t, directory, "checkout", "-qb", "theirs")
 			oursText, theirsText := "A=2\nB=1\nC=1\n", "A=1\nB=1\nC=2\n"
 			conflict := scenario == "conflict" || scenario == "rebase" || scenario == "cherry-pick"
 			if conflict {
@@ -292,17 +292,17 @@ func TestMergeGitDriver(t *testing.T) {
 				theirsText = oursText
 			}
 			writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, theirsText, false)))
-			cleanGit(t, directory, "add", "secret.env")
-			cleanGit(t, directory, "commit", "-qm", "theirs")
-			cleanGit(t, directory, "checkout", "-q", "ours")
+			runGit(t, directory, "add", "secret.env")
+			runGit(t, directory, "commit", "-qm", "theirs")
+			runGit(t, directory, "checkout", "-q", "ours")
 			ours := encryptUnlockFixture(t, identity, oursText, false)
 			writeStatusFile(t, directory, "secret.env", string(ours))
-			cleanGit(t, directory, "add", "secret.env")
-			cleanGit(t, directory, "commit", "-qm", "ours")
+			runGit(t, directory, "add", "secret.env")
+			runGit(t, directory, "commit", "-qm", "ours")
 			operation := []string{"merge", "--no-edit", "theirs"}
 			switch scenario {
 			case "rebase":
-				cleanGit(t, directory, "checkout", "-q", "theirs")
+				runGit(t, directory, "checkout", "-q", "theirs")
 				operation = []string{"rebase", "ours"}
 			case "cherry-pick":
 				operation = []string{"cherry-pick", "theirs"}
@@ -313,7 +313,7 @@ func TestMergeGitDriver(t *testing.T) {
 			}
 			output, err := exec.Command("git", append([]string{"-C", directory}, operation...)...).CombinedOutput()
 			if conflict {
-				if err == nil || !strings.Contains(string(output), "is now UNLOCKED") || len(cleanGit(t, directory, "ls-files", "-u")) == 0 {
+				if err == nil || !strings.Contains(string(output), "is now UNLOCKED") || len(runGit(t, directory, "ls-files", "-u")) == 0 {
 					t.Fatalf("conflict: %v, %s", err, output)
 				}
 				working, err := os.ReadFile(filepath.Join(directory, "secret.env"))
@@ -321,20 +321,20 @@ func TestMergeGitDriver(t *testing.T) {
 					t.Fatalf("markers: %v, %q", err, working)
 				}
 				writeStatusFile(t, directory, "secret.env", "resolved\n")
-				cleanGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
+				runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 				output, err = exec.Command("git", "-C", directory, "add", "secret.env").CombinedOutput()
-				if err == nil || !strings.Contains(string(output), "Refusing to stage it as plaintext") || len(cleanGit(t, directory, "ls-files", "-u")) == 0 {
+				if err == nil || !strings.Contains(string(output), "Refusing to stage it as plaintext") || len(runGit(t, directory, "ls-files", "-u")) == 0 {
 					t.Fatalf("failed staging: %v, %s", err, output)
 				}
-				cleanGit(t, directory, "config", "--unset", "age.trustedRecipients")
-				cleanGit(t, directory, "add", "secret.env")
-				assertCleanDecrypts(t, cleanGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))
+				runGit(t, directory, "config", "--unset", "age.trustedRecipients")
+				runGit(t, directory, "add", "secret.env")
+				assertCleanDecrypts(t, runGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))
 				if scenario == "rebase" || scenario == "cherry-pick" {
-					cleanGit(t, directory, scenario, "--continue")
+					runGit(t, directory, scenario, "--continue")
 				} else {
-					cleanGit(t, directory, "commit", "-qm", "resolved")
+					runGit(t, directory, "commit", "-qm", "resolved")
 				}
-				assertCleanDecrypts(t, cleanGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("resolved\n"))
+				assertCleanDecrypts(t, runGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("resolved\n"))
 			} else if scenario == "no identity" {
 				working, readErr := os.ReadFile(filepath.Join(directory, "secret.env"))
 				if err == nil || !strings.Contains(string(output), "keeping our version") || readErr != nil || !bytes.Equal(working, ours) {
@@ -344,7 +344,7 @@ func TestMergeGitDriver(t *testing.T) {
 				if err != nil {
 					t.Fatalf("merge: %v, %s", err, output)
 				}
-				merged := cleanGit(t, directory, "show", "HEAD:secret.env")
+				merged := runGit(t, directory, "show", "HEAD:secret.env")
 				want := []byte("A=2\nB=1\nC=2\n")
 				if scenario == "identical" {
 					want = []byte(oursText)

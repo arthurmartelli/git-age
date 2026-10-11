@@ -33,12 +33,12 @@ func TestPrePushGitHook(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	directory, _, _ := cleanFixture(t, []byte("original\n"), false)
 	remote := filepath.Join(t.TempDir(), "remote.git")
-	cleanGit(t, directory, "init", "--bare", "-q", remote)
-	cleanGit(t, directory, "remote", "add", "origin", remote)
-	if _, err := runInstall(directory, "--mode", "always-lock"); err != nil {
+	runGit(t, directory, "init", "--bare", "-q", remote)
+	runGit(t, directory, "remote", "add", "origin", remote)
+	if _, err := runCommand(directory, "install", "--mode", "always-lock"); err != nil {
 		t.Fatal(err)
 	}
-	cleanGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
+	runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
 	remoteHead := func() string {
 		t.Helper()
 		output, err := exec.Command("git", "--git-dir="+remote, "rev-parse", "refs/heads/main").Output()
@@ -56,8 +56,8 @@ func TestPrePushGitHook(t *testing.T) {
 		}
 	}
 	writeStatusFile(t, directory, "secret.env", "leaked\n")
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "--no-verify", "-qm", "plaintext")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "--no-verify", "-qm", "plaintext")
 	refuse("HEAD:refs/heads/main", "secret.env")
 	if remoteHead() != initial {
 		t.Fatal("refused push changed the remote")
@@ -66,47 +66,47 @@ func TestPrePushGitHook(t *testing.T) {
 	if code := Run([]string{"-C", directory, "lock"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("lock: exit %d, %s", code, &stderr)
 	}
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "encrypt again")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "-qm", "encrypt again")
 	refuse("HEAD:refs/heads/main", "secret.env") // Removing plaintext at the tip does not erase its history.
 	t.Setenv("GIT_AGE_ALLOW_PLAINTEXT_PUSH", "yes")
-	output := cleanGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
+	output := runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
 	if !bytes.Contains(output, []byte("by explicit choice (GIT_AGE_ALLOW_PLAINTEXT_PUSH)")) {
 		t.Fatalf("override was not reported: %s", output)
 	}
 	t.Setenv("GIT_AGE_ALLOW_PLAINTEXT_PUSH", "")
 	writeStatusFile(t, directory, "secret.env", "new safe edit\n")
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "safe edit")
-	cleanGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "-qm", "safe edit")
+	runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
 	// Already published plaintext does not block an unrelated new branch.
-	cleanGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/safe-copy")
-	cleanGit(t, directory, "checkout", "-qb", "leak")
+	runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/safe-copy")
+	runGit(t, directory, "checkout", "-qb", "leak")
 	writeStatusFile(t, directory, "secret.env", "branch leak\n")
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "--no-verify", "-qm", "branch leak")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "--no-verify", "-qm", "branch leak")
 	refuse("leak:refs/heads/leak", "secret.env")
-	cleanGit(t, directory, "tag", "-a", "leaky-tag", "-m", "leaky annotated tag")
+	runGit(t, directory, "tag", "-a", "leaky-tag", "-m", "leaky annotated tag")
 	refuse("refs/tags/leaky-tag:refs/tags/leaky-tag", "secret.env")
-	cleanGit(t, directory, "push", "--no-verify", "-q", "origin", "leak:refs/heads/leak")
-	cleanGit(t, directory, "push", "-q", "origin", ":refs/heads/leak")
+	runGit(t, directory, "push", "--no-verify", "-q", "origin", "leak:refs/heads/leak")
+	runGit(t, directory, "push", "-q", "origin", ":refs/heads/leak")
 	refuse("leak:refs/heads/leak", "secret.env")
-	cleanGit(t, directory, "checkout", "-qb", "replayed", "origin/main")
-	cleanGit(t, directory, "cherry-pick", "leak")
+	runGit(t, directory, "checkout", "-qb", "replayed", "origin/main")
+	runGit(t, directory, "cherry-pick", "leak")
 	refuse("replayed:refs/heads/replayed", "secret.env")
-	cleanGit(t, directory, "checkout", "-qb", "keys", "origin/main")
+	runGit(t, directory, "checkout", "-qb", "keys", "origin/main")
 	writeStatusFile(t, directory, "k.txt", rekeyIdentity(t).String()+"\n")
-	cleanGit(t, directory, "add", "k.txt")
-	cleanGit(t, directory, "commit", "--no-verify", "-qm", "private key")
+	runGit(t, directory, "add", "k.txt")
+	runGit(t, directory, "commit", "--no-verify", "-qm", "private key")
 	refuse("keys:refs/heads/keys", "Private age keys in the commits being pushed")
-	cleanGit(t, directory, "rm", "k.txt")
-	cleanGit(t, directory, "commit", "-qm", "remove key")
+	runGit(t, directory, "rm", "k.txt")
+	runGit(t, directory, "commit", "-qm", "remove key")
 	refuse("keys:refs/heads/keys", "k.txt")
-	cleanGit(t, directory, "switch", "--orphan", "no-rules")
+	runGit(t, directory, "switch", "--orphan", "no-rules")
 	writeStatusFile(t, directory, "notes.txt", "AGE-SECRET-KEY-1 is a marker\n")
-	cleanGit(t, directory, "add", "notes.txt")
-	cleanGit(t, directory, "commit", "-qm", "no rules")
-	if output := cleanGit(t, directory, "push", "-q", "origin", "no-rules:refs/heads/no-rules"); len(output) != 0 {
+	runGit(t, directory, "add", "notes.txt")
+	runGit(t, directory, "commit", "-qm", "no rules")
+	if output := runGit(t, directory, "push", "-q", "origin", "no-rules:refs/heads/no-rules"); len(output) != 0 {
 		t.Fatalf("no-rules push should be silent: %s", output)
 	}
 	refuse("leak:refs/heads/leak", "secret.env") // Uses the pushed branch's rules, not this checkout's.
@@ -114,7 +114,7 @@ func TestPrePushGitHook(t *testing.T) {
 	if err == nil || !bytes.Contains(output, []byte("push aborted")) {
 		t.Fatalf("multiple-ref push allowed a leak: %v, %s", err, output)
 	}
-	if refs := cleanGit(t, directory, "ls-remote", "origin", "refs/heads/multi-safe", "refs/heads/multi-leak"); len(refs) != 0 {
+	if refs := runGit(t, directory, "ls-remote", "origin", "refs/heads/multi-safe", "refs/heads/multi-leak"); len(refs) != 0 {
 		t.Fatalf("refused push partially updated remote: %s", refs)
 	}
 }
@@ -130,9 +130,9 @@ func TestCheckPushUsesCurrentAndHistoricalRules(t *testing.T) {
 					t.Skipf("SHA256 repositories unavailable: %v, %s", err, output)
 				}
 			}
-			cleanGit(t, directory, "config", "user.name", "Test")
-			cleanGit(t, directory, "config", "user.email", "test@example.invalid")
-			cleanGit(t, directory, "config", "commit.gpgsign", "false")
+			runGit(t, directory, "config", "user.name", "Test")
+			runGit(t, directory, "config", "user.email", "test@example.invalid")
+			runGit(t, directory, "config", "commit.gpgsign", "false")
 			content := "plaintext\n"
 			if scenario == "empty" {
 				content = ""
@@ -144,17 +144,17 @@ func TestCheckPushUsesCurrentAndHistoricalRules(t *testing.T) {
 			if scenario == "local key" {
 				writeStatusFile(t, directory, ".gitage.key", "not a key")
 			}
-			cleanGit(t, directory, "add", "-f", ".")
-			cleanGit(t, directory, "commit", "-qm", "plaintext version")
+			runGit(t, directory, "add", "-f", ".")
+			runGit(t, directory, "commit", "-qm", "plaintext version")
 			if scenario == "before rules" {
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 			} else if scenario == "removed rules" {
-				cleanGit(t, directory, "rm", ".gitage")
-				cleanGit(t, directory, "commit", "-qm", "remove rules")
+				runGit(t, directory, "rm", ".gitage")
+				runGit(t, directory, "commit", "-qm", "remove rules")
 			} else if scenario == "negation" {
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n!secret.env\n")
 			}
-			tip := strings.TrimSpace(string(cleanGit(t, directory, "rev-parse", "HEAD")))
+			tip := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))
 			input := "refs/heads/main " + tip + " refs/heads/main " + strings.Repeat("0", len(tip)) + "\n"
 			before := installSnapshot(t, directory)
 			check, err := repository.CheckPush(directory, "origin", strings.NewReader(input))
@@ -203,26 +203,26 @@ func TestPrePushProtocol(t *testing.T) {
 func TestCheckPushMergeResolution(t *testing.T) {
 	directory, identity, _ := cleanFixture(t, []byte("base\n"), false)
 	writeStatusFile(t, directory, ".gitattributes", "secret.env -merge\n")
-	cleanGit(t, directory, "add", ".gitattributes")
-	cleanGit(t, directory, "commit", "-qm", "binary merge")
-	cleanGit(t, directory, "branch", "ours")
-	cleanGit(t, directory, "checkout", "-qb", "theirs")
+	runGit(t, directory, "add", ".gitattributes")
+	runGit(t, directory, "commit", "-qm", "binary merge")
+	runGit(t, directory, "branch", "ours")
+	runGit(t, directory, "checkout", "-qb", "theirs")
 	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "theirs\n", false)))
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "theirs")
-	cleanGit(t, directory, "update-ref", "refs/remotes/origin/theirs", "HEAD")
-	cleanGit(t, directory, "checkout", "-q", "ours")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "-qm", "theirs")
+	runGit(t, directory, "update-ref", "refs/remotes/origin/theirs", "HEAD")
+	runGit(t, directory, "checkout", "-q", "ours")
 	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "ours\n", false)))
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "ours")
-	previous := strings.TrimSpace(string(cleanGit(t, directory, "rev-parse", "HEAD")))
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "-qm", "ours")
+	previous := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))
 	if err := exec.Command("git", "-C", directory, "merge", "--no-edit", "theirs").Run(); err == nil {
 		t.Fatal("expected a merge conflict")
 	}
 	writeStatusFile(t, directory, "secret.env", "plaintext resolution\n")
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "--no-verify", "-qm", "plaintext merge resolution")
-	tip := strings.TrimSpace(string(cleanGit(t, directory, "rev-parse", "HEAD")))
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "--no-verify", "-qm", "plaintext merge resolution")
+	tip := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))
 	input := "refs/heads/ours " + tip + " refs/heads/ours " + previous + "\n"
 	check, err := repository.CheckPush(directory, "origin", strings.NewReader(input))
 	if err != nil || !reflect.DeepEqual(check.Plaintext, []string{"secret.env"}) {

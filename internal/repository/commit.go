@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -25,67 +24,50 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 	if err := checkRecipientTrust(root); err != nil {
 		return result, err
 	}
-	identities, _, base, external, err := encryptionKeysFromRules(root, root, nil, nil, check.rules)
+	keys, err := loadKeys(root, root, nil, nil, check.rules)
 	if err != nil {
 		return result, err
 	}
-	git := func(args ...string) ([]byte, error) {
-		return exec.Command("git", append([]string{"-C", root}, args...)...).Output()
-	}
-	initial, err := git("write-tree")
+	initial, err := git(root, "write-tree")
 	if err != nil {
 		return result, err
 	}
-	head, _ := git("rev-parse", "--verify", "HEAD^{tree}")
+	head, _ := git(root, "rev-parse", "--verify", "HEAD^{tree}")
 	var updates bytes.Buffer
 	var workingCopies []replacement
 	for _, file := range check.Files {
-		if file.State != "UNLOCKED" {
+		if file.State != Unlocked {
 			continue
 		}
-		original, err := git("cat-file", "blob", check.blobs[file.Path])
+		original, err := git(root, "cat-file", "blob", check.blobs[file.Path])
 		if err != nil {
 			return result, err
 		}
-		path := filepath.Join(root, filepath.FromSlash(file.Path))
-		values, rules, err := fileRecipientsFromRules(root, path, base, check.rules)
-		if err != nil {
-			return result, err
-		}
-		recipients, err := parseRecipients(values)
+		path := nativePath(root, file.Path)
+		target, err := keys.target(root, path, check.rules)
 		if err != nil {
 			return result, fmt.Errorf("%s: %w", file.Path, err)
 		}
-		var ciphertext []byte
-		if !external && workingRulesMatchIndex(rules, check.rules) {
-			ciphertext = reusableCiphertext(root, path, rules, original, identities)
+		ciphertext, err := keys.encrypt(root, path, target, original, workingRulesMatchIndex(target.rules, check.rules))
+		if err != nil {
+			return result, err
 		}
-		if ciphertext == nil {
-			ciphertext, err = encryptContent(original, recipients)
-			if err != nil {
-				return result, err
-			}
-		}
-		command := exec.Command("git", "-C", root, "hash-object", "-w", "--stdin")
-		command.Stdin = bytes.NewReader(ciphertext)
-		oid, err := command.Output()
+		oid, err := gitWithInput(root, ciphertext, "hash-object", "-w", "--stdin")
 		if err != nil {
 			return result, err
 		}
 		fmt.Fprintf(&updates, "%s %s\t%s%c", check.modes[file.Path], strings.TrimSpace(string(oid)), file.Path, 0)
 		workingCopies = append(workingCopies, replacement{path, original, ciphertext})
 	}
-	current, err := git("ls-files", "--stage", "-z")
+	current, err := git(root, "ls-files", "--stage", "-z")
 	if err != nil {
 		return result, err
 	}
 	if !bytes.Equal(current, check.index) {
 		return result, fmt.Errorf("index changed while preparing encryption; stage your files and retry")
 	}
-	command := exec.Command("git", "-C", root, "update-index", "-z", "--index-info")
-	command.Stdin = &updates
-	if output, err := command.CombinedOutput(); err != nil {
-		return result, fmt.Errorf("update encrypted index: %w: %s", err, output)
+	if _, err := gitWithInput(root, updates.Bytes(), "update-index", "-z", "--index-info"); err != nil {
+		return result, fmt.Errorf("update encrypted index: %w", err)
 	}
 	for _, change := range workingCopies {
 		// Failure to lock a working copy must not discard unstaged changes or
@@ -95,7 +77,7 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 			result.LeftUnchanged = append(result.LeftUnchanged, filepath.ToSlash(relative))
 		}
 	}
-	final, err := git("write-tree")
+	final, err := git(root, "write-tree")
 	if err != nil {
 		return result, err
 	}
@@ -131,7 +113,7 @@ func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]b
 			return nil, err
 		}
 		relative, _ := filepath.Rel(root, path)
-		previous, gitErr := exec.Command("git", "-C", root, "show", "HEAD:"+filepath.ToSlash(relative)).Output()
+		previous, gitErr := git(root, "show", "HEAD:"+filepath.ToSlash(relative))
 		var old []string
 		if gitErr == nil {
 			_, old, err = parseRules(path, previous)
@@ -149,7 +131,7 @@ func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]b
 	var candidates []string
 	for path := range blobs {
 		for _, parent := range changed {
-			absolute := filepath.Join(root, filepath.FromSlash(path))
+			absolute := nativePath(root, path)
 			if inside(parent, absolute) {
 				candidates = append(candidates, absolute)
 				break
@@ -162,15 +144,15 @@ func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]b
 	}
 	var stale []string
 	for _, file := range files {
-		previous, err := exec.Command("git", "-C", root, "rev-parse", "--verify", "HEAD:"+file.Path).Output()
+		previous, err := git(root, "rev-parse", "--verify", "HEAD:"+file.Path)
 		if err != nil || strings.TrimSpace(string(previous)) != blobs[file.Path] {
 			continue
 		}
-		content, err := exec.Command("git", "-C", root, "cat-file", "blob", blobs[file.Path]).Output()
+		content, err := git(root, "cat-file", "blob", blobs[file.Path])
 		if err != nil {
 			return nil, err
 		}
-		if contentState(content) == "LOCKED" {
+		if contentState(content) == Locked {
 			stale = append(stale, file.Path)
 		}
 	}
@@ -182,7 +164,7 @@ func MergedRecipientChanges(directory string) ([]string, error) {
 	if err != nil || root == "" {
 		return nil, err
 	}
-	output, err := exec.Command("git", "-C", root, "diff", "--name-only", "--no-renames", "-z", "ORIG_HEAD", "HEAD").Output()
+	output, err := git(root, "diff", "--name-only", "--no-renames", "-z", "ORIG_HEAD", "HEAD")
 	if err != nil {
 		return nil, nil // No merge range is available, for example on an unborn branch.
 	}
@@ -194,7 +176,7 @@ func MergedRecipientChanges(directory string) ([]string, error) {
 		}
 		var versions [][]string
 		for _, revision := range []string{"ORIG_HEAD", "HEAD"} {
-			content, err := exec.Command("git", "-C", root, "show", revision+":"+path).Output()
+			content, err := git(root, "show", revision+":"+path)
 			var recipients []string
 			if err == nil {
 				_, recipients, err = parseRules(path, content)

@@ -15,14 +15,9 @@ func newRekeyCommand(options *globalOptions) *cobra.Command {
 		Short: "re-encrypt every protected file to the current recipients",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			files, err := repository.ProtectedFiles(options.directory, args)
+			files, err := knownFiles(options.directory, args)
 			if err != nil {
 				return err
-			}
-			for _, file := range files {
-				if file.State == "UNKNOWN" {
-					return fmt.Errorf("cannot determine file state: %s", file.Path)
-				}
 			}
 			skipped := map[string]bool{}
 			if !options.dryRun {

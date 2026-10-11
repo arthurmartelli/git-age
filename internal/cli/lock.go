@@ -7,6 +7,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// knownFiles selects protected files, failing if any has an unknown state.
+func knownFiles(directory string, paths []string) ([]repository.ProtectedFile, error) {
+	files, err := repository.ProtectedFiles(directory, paths)
+	if err == nil {
+		err = repository.CheckKnown(files)
+	}
+	return files, err
+}
+
+// reportFiles prints what verb did, or would do, to each file not yet in state done.
+func reportFiles(cmd *cobra.Command, options *globalOptions, files []repository.ProtectedFile, done repository.State, verb string) error {
+	for _, file := range files {
+		var message string
+		switch {
+		case file.State == done && options.verbose:
+			message = "already " + verb + "ed"
+		case file.State == done:
+			continue
+		case options.dryRun:
+			message = "would " + verb
+		case options.verbose:
+			message = verb + "ing"
+		default:
+			continue
+		}
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", message, file.Path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func newLockCommand(options *globalOptions) *cobra.Command {
 	var recipients, identities []string
 	var noReuse bool
@@ -16,14 +48,9 @@ func newLockCommand(options *globalOptions) *cobra.Command {
 		Short: "encrypt protected working-tree files",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			files, err := repository.ProtectedFiles(options.directory, args)
+			files, err := knownFiles(options.directory, args)
 			if err != nil {
 				return err
-			}
-			for _, file := range files {
-				if file.State == "UNKNOWN" {
-					return fmt.Errorf("cannot determine file state: %s", file.Path)
-				}
 			}
 			if !options.dryRun {
 				noAccess, err := repository.Lock(options.directory, files, recipients, identities, noReuse)
@@ -39,25 +66,7 @@ func newLockCommand(options *globalOptions) *cobra.Command {
 					return err
 				}
 			}
-			for _, file := range files {
-				var message string
-				switch {
-				case file.State == "LOCKED" && options.verbose:
-					message = "already locked"
-				case file.State == "LOCKED":
-					continue
-				case options.dryRun:
-					message = "would lock"
-				case options.verbose:
-					message = "locking"
-				default:
-					continue
-				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", message, file.Path); err != nil {
-					return err
-				}
-			}
-			return nil
+			return reportFiles(cmd, options, files, repository.Locked, "lock")
 		},
 	}
 	recipientFlags(lock.Flags(), &recipients)

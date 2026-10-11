@@ -3,9 +3,8 @@ package repository
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -41,40 +40,36 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		return result, fmt.Errorf("check --cached requires a Git repository")
 	}
 	result.root = root
-	git := func(args ...string) ([]byte, error) {
-		output, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
+	indexGit := func(args ...string) ([]byte, error) {
+		output, err := git(root, args...)
 		if err != nil {
 			return nil, fmt.Errorf("read index: git %s: %w", args[0], err)
 		}
 		return output, nil
 	}
-	output, err := git("ls-files", "--stage", "-z")
+	output, err := indexGit("ls-files", "--stage", "-z")
 	if err != nil {
 		return result, err
 	}
 	blobs := map[string]string{}
 	modes := map[string]string{}
 	result.index, result.blobs, result.modes = output, blobs, modes
-	for _, record := range bytes.Split(output, []byte{0}) {
-		if len(record) == 0 {
-			continue
+	entries, err := stageEntries(output)
+	if err != nil {
+		return result, err
+	}
+	for _, entry := range entries {
+		if entry.stage != "0" {
+			return result, fmt.Errorf("unmerged index entry: %s", entry.path)
 		}
-		header, path, ok := strings.Cut(string(record), "\t")
-		fields := strings.Fields(header)
-		if !ok || len(fields) != 3 {
-			return result, fmt.Errorf("invalid Git index record")
-		}
-		if fields[2] != "0" {
-			return result, fmt.Errorf("unmerged index entry: %s", path)
-		}
-		if fields[0] == "100644" || fields[0] == "100755" {
-			blobs[path] = fields[1]
-			modes[path] = fields[0]
+		if regularMode(entry.mode) {
+			blobs[entry.path] = entry.oid
+			modes[entry.path] = entry.mode
 		}
 	}
 
 	// Moving a rule file can unprotect files, so it must count as a removal.
-	output, err = git("diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z", "--diff-filter=DT")
+	output, err = indexGit("diff", "--cached", "--raw", "--no-abbrev", "--no-renames", "-z", "--diff-filter=DT")
 	if err != nil {
 		return result, err
 	}
@@ -82,11 +77,11 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 	for i := 0; i+1 < len(records); i += 2 {
 		fields := strings.Fields(string(records[i]))
 		path := string(records[i+1])
-		if len(fields) == 5 && (fields[0] == ":100644" || fields[0] == ":100755") && filepath.Base(path) == ".gitage" && blobs[path] == "" {
+		if len(fields) == 5 && regularMode(strings.TrimPrefix(fields[0], ":")) && filepath.Base(path) == ".gitage" && blobs[path] == "" {
 			result.RemovedRules = append(result.RemovedRules, path)
 		}
 	}
-	sort.Strings(result.RemovedRules)
+	slices.Sort(result.RemovedRules)
 
 	rules := map[string][]byte{}
 	result.rules = rules
@@ -94,17 +89,17 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		if filepath.Base(path) != ".gitage" {
 			continue
 		}
-		content, err := git("cat-file", "blob", oid)
+		content, err := indexGit("cat-file", "blob", oid)
 		if err != nil {
 			return result, err
 		}
-		rules[filepath.Join(root, filepath.FromSlash(path))] = content
+		rules[nativePath(root, path)] = content
 	}
 	result.HasRules = len(rules) != 0
 	if !result.HasRules && requireRules {
 		return result, fmt.Errorf("no .gitage files staged")
 	}
-	output, err = git("diff", "--cached", "--name-only", "--no-renames", "-z", "--diff-filter=ACMRT")
+	output, err = indexGit("diff", "--cached", "--name-only", "--no-renames", "-z", "--diff-filter=ACMRT")
 	if err != nil {
 		return result, err
 	}
@@ -115,12 +110,12 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		if blobs[path] == "" {
 			continue
 		}
-		content, err := git("cat-file", "blob", blobs[path])
+		content, err := indexGit("cat-file", "blob", blobs[path])
 		if err != nil {
 			return result, err
 		}
 		changed[path] = content
-		candidates = append(candidates, filepath.Join(root, filepath.FromSlash(path)))
+		candidates = append(candidates, nativePath(root, path))
 	}
 	result.Files, err = matchProtectedFiles(root, root, candidates, rules, ruleIgnoreCase(root, true))
 	if err != nil {
@@ -137,7 +132,7 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 			result.PrivateKeys = append(result.PrivateKeys, path)
 		}
 	}
-	sort.Strings(result.PrivateKeys)
+	slices.Sort(result.PrivateKeys)
 	if !requireRules {
 		result.StaleFiles, err = stagedStaleFiles(root, blobs, rules)
 	}

@@ -8,8 +8,8 @@ import (
 )
 
 func Edit(directory string, file ProtectedFile, recipients, identities []string, edit func(string) error) error {
-	if file.State == "UNLOCKED" {
-		path, err := filepath.Abs(filepath.Join(directory, filepath.FromSlash(file.Path)))
+	if file.State == Unlocked {
+		path, err := filepath.Abs(nativePath(directory, file.Path))
 		if err != nil {
 			return err
 		}

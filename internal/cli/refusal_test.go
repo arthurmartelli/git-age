@@ -33,7 +33,7 @@ func TestMalformedPatternsRefusedBeforeChanges(t *testing.T) {
 			initKeygenRepo(t, directory)
 			writeStatusFile(t, directory, ".gitage", "[files]\n"+test.pattern+"\n")
 			writeStatusFile(t, directory, "secret.env", "plaintext\n")
-			cleanGit(t, directory, "add", ".gitage", "secret.env")
+			runGit(t, directory, "add", ".gitage", "secret.env")
 			before := installSnapshot(t, directory)
 			for _, args := range [][]string{{"status"}, {"lock"}, {"check", "--cached"}, {"install"}} {
 				var stdout, stderr bytes.Buffer
@@ -73,7 +73,7 @@ func TestValidPatternSyntaxStillMatchesGit(t *testing.T) {
 			initKeygenRepo(t, directory)
 			writeStatusFile(t, directory, ".gitage", "[files]\r\n"+test.pattern+"\r\n")
 			writeStatusFile(t, directory, test.name, "plaintext\n")
-			output, err := runStatus(directory)
+			output, err := runCommand(directory, "status")
 			if err != nil || output != "UNLOCKED   "+test.name+"\n" {
 				t.Fatalf("valid pattern: %v, %q", err, output)
 			}

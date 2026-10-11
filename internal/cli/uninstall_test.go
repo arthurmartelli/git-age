@@ -19,22 +19,22 @@ func TestUninstall(t *testing.T) {
 			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 			workingDirectory := directory
 			if scenario == "linked worktree" {
-				cleanGit(t, directory, "config", "user.name", "Test")
-				cleanGit(t, directory, "config", "user.email", "test@example.com")
-				cleanGit(t, directory, "config", "commit.gpgsign", "false")
-				cleanGit(t, directory, "add", ".gitage")
-				cleanGit(t, directory, "commit", "-qm", "rules")
+				runGit(t, directory, "config", "user.name", "Test")
+				runGit(t, directory, "config", "user.email", "test@example.com")
+				runGit(t, directory, "config", "commit.gpgsign", "false")
+				runGit(t, directory, "add", ".gitage")
+				runGit(t, directory, "commit", "-qm", "rules")
 				workingDirectory = filepath.Join(t.TempDir(), "linked")
-				cleanGit(t, directory, "worktree", "add", "-qb", "linked", workingDirectory)
+				runGit(t, directory, "worktree", "add", "-qb", "linked", workingDirectory)
 			} else if scenario == "relative hooks path" {
-				cleanGit(t, directory, "config", "core.hooksPath", "custom hooks")
+				runGit(t, directory, "config", "core.hooksPath", "custom hooks")
 			} else if scenario == "absolute hooks path" {
-				cleanGit(t, directory, "config", "core.hooksPath", filepath.Join(t.TempDir(), "custom hooks"))
+				runGit(t, directory, "config", "core.hooksPath", filepath.Join(t.TempDir(), "custom hooks"))
 			}
 			attributes := installGitPath(t, workingDirectory, "info/attributes")
 			prefix, suffix := "# user prefix\r\n*.txt diff=custom\r\n", "*.md diff=markdown\r\n# user suffix\r\n"
 			writeStatusFile(t, filepath.Dir(attributes), "attributes", prefix)
-			if _, err := runInstall(workingDirectory, "--mode=always-lock", "--unlock-after-commit"); err != nil {
+			if _, err := runCommand(workingDirectory, "install", "--mode=always-lock", "--unlock-after-commit"); err != nil {
 				t.Fatal(err)
 			}
 			content, err := os.ReadFile(attributes)
@@ -55,10 +55,10 @@ func TestUninstall(t *testing.T) {
 				"merge.other.driver": "true", "filter.other.clean": "cat",
 			}
 			for key, value := range preserved {
-				cleanGit(t, directory, "config", key, value)
+				runGit(t, directory, "config", key, value)
 			}
 			// Duplicate values and valueless settings must also be removed.
-			cleanGit(t, directory, "config", "--add", "age.hookMode", "abort")
+			runGit(t, directory, "config", "--add", "age.hookMode", "abort")
 			config := installGitPath(t, workingDirectory, "config")
 			file, err := os.OpenFile(config, os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
@@ -79,7 +79,7 @@ func TestUninstall(t *testing.T) {
 			} else if scenario == "malformed rules" {
 				writeStatusFile(t, workingDirectory, ".gitage", "[unknown]\n")
 			}
-			beforeIndex := cleanGit(t, workingDirectory, "ls-files", "--stage", "-z")
+			beforeIndex := runGit(t, workingDirectory, "ls-files", "--stage", "-z")
 			beforeFiles := map[string][]byte{}
 			for _, name := range []string{"locked.env", "unlocked.env", ".gitage", ".gitage.key"} {
 				data, err := os.ReadFile(filepath.Join(workingDirectory, name))
@@ -94,7 +94,7 @@ func TestUninstall(t *testing.T) {
 				writeStatusFile(t, directory, "sub/.keep", "")
 				workingDirectory = filepath.Join(directory, "sub")
 			}
-			output, err := runUninstall(workingDirectory)
+			output, err := runCommand(workingDirectory, "uninstall")
 			if err != nil || !strings.Contains(output, "uninstalled Git integration") {
 				t.Fatalf("uninstall: %v, %s", err, output)
 			}
@@ -109,7 +109,7 @@ func TestUninstall(t *testing.T) {
 				}
 			}
 			for key, want := range preserved {
-				if got := strings.TrimSpace(string(cleanGit(t, directory, "config", "--local", "--get", key))); got != want {
+				if got := strings.TrimSpace(string(runGit(t, directory, "config", "--local", "--get", key))); got != want {
 					t.Errorf("%s: got %q, want %q", key, got, want)
 				}
 			}
@@ -123,7 +123,7 @@ func TestUninstall(t *testing.T) {
 					t.Fatalf("attribute permissions: %v, %v", info, err)
 				}
 			}
-			if !bytes.Equal(beforeIndex, cleanGit(t, workingDirectory, "ls-files", "--stage", "-z")) {
+			if !bytes.Equal(beforeIndex, runGit(t, workingDirectory, "ls-files", "--stage", "-z")) {
 				t.Fatal("uninstall changed the index")
 			}
 			fileRoot := directory
@@ -137,7 +137,7 @@ func TestUninstall(t *testing.T) {
 				}
 			}
 			before := installSnapshot(t, directory)
-			output, err = runUninstall(workingDirectory)
+			output, err = runCommand(workingDirectory, "uninstall")
 			if err != nil || output != "git-age: nothing to uninstall\n" || !reflect.DeepEqual(before, installSnapshot(t, directory)) {
 				t.Fatalf("repeat uninstall: %v, %q", err, output)
 			}
@@ -152,7 +152,7 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 			initKeygenRepo(t, directory)
 			args, want := []string{}, ""
 			if scenario != "missing installation" {
-				if _, err := runInstall(directory, "--mode=abort"); err != nil {
+				if _, err := runCommand(directory, "install", "--mode=abort"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -179,11 +179,11 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 					}
 				}
 			case "disabled hooks":
-				cleanGit(t, directory, "config", "core.hooksPath", os.DevNull)
+				runGit(t, directory, "config", "core.hooksPath", os.DevNull)
 				want = "uninstalled Git integration"
 			}
 			before := installSnapshot(t, directory)
-			output, err := runUninstall(directory, args...)
+			output, err := runCommand(directory, "uninstall", args...)
 			if want != "" {
 				if err != nil || !strings.Contains(output, want) {
 					t.Fatalf("uninstall: %v, %q", err, output)
@@ -196,7 +196,7 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 			}
 		})
 	}
-	if _, err := runUninstall(t.TempDir()); err == nil || !strings.Contains(err.Error(), "requires a Git worktree") {
+	if _, err := runCommand(t.TempDir(), "uninstall"); err == nil || !strings.Contains(err.Error(), "requires a Git worktree") {
 		t.Fatalf("outside Git: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
@@ -210,7 +210,7 @@ func TestUninstallKeepsUnmanagedHooks(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			if _, err := runInstall(directory); err != nil {
+			if _, err := runCommand(directory, "install"); err != nil {
 				t.Fatal(err)
 			}
 			hooks := installGitPath(t, directory, "hooks")
@@ -234,7 +234,7 @@ func TestUninstallKeepsUnmanagedHooks(t *testing.T) {
 				}
 			}
 			before := installSnapshot(t, directory)
-			output, err := runUninstall(directory)
+			output, err := runCommand(directory, "uninstall")
 			if err != nil || !strings.Contains(output, "Kept post-rewrite hook") {
 				t.Fatalf("uninstall: %v, %q", err, output)
 			}
@@ -256,13 +256,13 @@ func TestUninstallKeepsInheritedConfig(t *testing.T) {
 	global := "[age]\nhookMode = abort\nunlockAfterCommit = true\n[diff \"age\"]\ntextconv = global\ncachetextconv = false\n[merge \"age\"]\ndriver = global\n[filter \"age\"]\nclean = global\n"
 	writeStatusFile(t, globalDirectory, "gitconfig", global)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
-	if _, err := runInstall(directory, "--mode=always-lock"); err != nil {
+	if _, err := runCommand(directory, "install", "--mode=always-lock"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runUninstall(directory); err != nil {
+	if _, err := runCommand(directory, "uninstall"); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(cleanGit(t, directory, "config", "--get", "diff.age.textconv")); got != "global\n" {
+	if got := string(runGit(t, directory, "config", "--get", "diff.age.textconv")); got != "global\n" {
 		t.Fatalf("inherited config changed: %q", got)
 	}
 	content, err := os.ReadFile(filepath.Join(globalDirectory, "gitconfig"))
@@ -270,18 +270,8 @@ func TestUninstallKeepsInheritedConfig(t *testing.T) {
 		t.Fatalf("global config changed: %v, %q", err, content)
 	}
 	before := installSnapshot(t, directory)
-	output, err := runUninstall(directory)
+	output, err := runCommand(directory, "uninstall")
 	if err != nil || output != "git-age: nothing to uninstall\n" || !reflect.DeepEqual(before, installSnapshot(t, directory)) {
 		t.Fatalf("inherited config counted as installed: %v, %q", err, output)
 	}
-}
-
-func runUninstall(directory string, args ...string) (string, error) {
-	var output bytes.Buffer
-	root := newRootCommand()
-	root.SetOut(&output)
-	root.SetErr(&output)
-	root.SetArgs(append([]string{"-C", directory, "uninstall"}, args...))
-	err := root.Execute()
-	return output.String(), err
 }

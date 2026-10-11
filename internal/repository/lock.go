@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"filippo.io/age"
@@ -28,40 +28,28 @@ func Rekey(directory string, files []ProtectedFile, explicitRecipients, identity
 }
 
 func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool, edit func(string) error) (encryptionResult, error) {
+	if err := CheckKnown(files); err != nil {
+		return encryptionResult{}, err
+	}
 	var pending []ProtectedFile
 	for _, file := range files {
-		if file.State == "UNKNOWN" {
-			return encryptionResult{}, fmt.Errorf("cannot determine file state: %s", file.Path)
-		}
-		if rekey || edit != nil || file.State != "LOCKED" {
+		if rekey || edit != nil || file.State != Locked {
 			pending = append(pending, file)
 		}
 	}
 	if len(pending) == 0 {
 		return encryptionResult{}, nil
 	}
-	directory, err := filepath.Abs(directory)
+	directory, root, inGit, err := resolveDirectory(directory)
 	if err != nil {
 		return encryptionResult{}, err
-	}
-	directory, err = filepath.EvalSymlinks(directory)
-	if err != nil {
-		return encryptionResult{}, err
-	}
-	root, err := gitRoot(directory)
-	if err != nil {
-		return encryptionResult{}, err
-	}
-	inGit := root != ""
-	if !inGit {
-		root = directory
 	}
 	if inGit {
 		if err := checkRecipientTrust(directory); err != nil {
 			return encryptionResult{}, err
 		}
 	}
-	identities, own, base, external, err := encryptionKeys(directory, root, explicitRecipients, identityPaths)
+	keys, err := loadKeys(directory, root, explicitRecipients, identityPaths, nil)
 	if err != nil {
 		return encryptionResult{}, err
 	}
@@ -69,12 +57,8 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 	var replacements []replacement
 	var skipped, noAccess []ProtectedFile
 	for _, file := range pending {
-		path := filepath.Join(directory, filepath.FromSlash(file.Path))
-		values, ruleFiles, err := fileRecipients(root, path, base)
-		if err != nil {
-			return encryptionResult{}, err
-		}
-		recipients, err := parseRecipients(values)
+		path := nativePath(directory, file.Path)
+		target, err := keys.target(root, path, nil)
 		if err != nil {
 			return encryptionResult{}, fmt.Errorf("%s: %w", file.Path, err)
 		}
@@ -83,14 +67,14 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 			return encryptionResult{}, err
 		}
 		plaintext := original
-		if (rekey || edit != nil) && file.State == "LOCKED" {
-			if len(identities) == 0 {
-				return encryptionResult{}, fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
+		if (rekey || edit != nil) && file.State == Locked {
+			if len(keys.identities) == 0 {
+				return encryptionResult{}, errNoIdentity
 			}
-			plaintext, err = decryptContent(original, identities)
+			plaintext, err = decryptContent(original, keys.identities)
 			if err != nil {
 				var noMatch *age.NoIdentityMatchError
-				if rekey && errors.As(err, &noMatch) && !containsRecipient(values, own) {
+				if rekey && errors.As(err, &noMatch) && !containsRecipient(target.values, keys.own) {
 					// A team member may only have access to part of the repository.
 					skipped = append(skipped, file)
 					continue
@@ -108,18 +92,12 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 				continue
 			}
 		}
-		var encrypted []byte
-		if inGit && !noReuse && !external {
-			encrypted = reusableCiphertext(root, path, ruleFiles, plaintext, identities)
-		}
-		if encrypted == nil {
-			encrypted, err = encryptContent(plaintext, recipients)
-			if err != nil {
-				return encryptionResult{}, err
-			}
+		encrypted, err := keys.encrypt(root, path, target, plaintext, inGit && !noReuse)
+		if err != nil {
+			return encryptionResult{}, err
 		}
 		replacements = append(replacements, replacement{path, original, encrypted})
-		if len(own) != 0 && !containsRecipient(values, own) {
+		if len(keys.own) != 0 && !containsRecipient(target.values, keys.own) {
 			noAccess = append(noAccess, file)
 		}
 	}
@@ -140,71 +118,97 @@ func checkRecipientTrust(directory string) error {
 	return nil
 }
 
-func encryptionKeys(directory, root string, explicitRecipients, identityPaths []string) (identities []age.Identity, own, base []string, external bool, err error) {
-	return encryptionKeysFromRules(directory, root, explicitRecipients, identityPaths, nil)
+var errNoIdentity = errors.New("no identity configured; use -i or generate a key with git-age keygen")
+
+// keys holds the identities and base recipients for encrypting files.
+type keys struct {
+	identities []age.Identity
+	own        []string // Recipients of the identities.
+	base       []string
+	external   bool // Base recipients come from outside the .gitage rules.
 }
 
-func encryptionKeysFromRules(directory, root string, explicitRecipients, identityPaths []string, rules map[string][]byte) (identities []age.Identity, own, base []string, external bool, err error) {
-	identities, own, err = loadIdentities(directory, root, identityPaths)
+// loadKeys reads the base recipients from rules, or from the .gitage files on
+// disk when rules is nil.
+func loadKeys(directory, root string, explicitRecipients, identityPaths []string, rules map[string][]byte) (keys, error) {
+	var k keys
+	var err error
+	k.identities, k.own, err = loadIdentities(directory, root, identityPaths)
 	if err != nil {
-		return
+		return k, err
 	}
-	base = explicitRecipients
-	if len(base) == 0 && os.Getenv("GIT_AGE_RECIPIENT") != "" {
-		base = []string{os.Getenv("GIT_AGE_RECIPIENT")}
+	k.base = explicitRecipients
+	if len(k.base) == 0 && os.Getenv("GIT_AGE_RECIPIENT") != "" {
+		k.base = []string{os.Getenv("GIT_AGE_RECIPIENT")}
 	}
-	external = len(base) != 0
-	if len(base) == 0 {
-		base, err = recipientsFromRules(filepath.Join(root, ".gitage"), rules)
+	k.external = len(k.base) != 0
+	if len(k.base) == 0 {
+		k.base, err = ruleRecipients(filepath.Join(root, ".gitage"), rules)
 		if err != nil {
-			return
+			return k, err
 		}
 	}
-	if len(base) == 0 {
-		base, err = configValues(directory, "age.recipient")
+	if len(k.base) == 0 {
+		k.base, err = configValues(directory, "age.recipient")
 		if err != nil {
-			return
+			return k, err
 		}
-		external = len(base) != 0
+		k.external = len(k.base) != 0
 	}
-	if len(base) == 0 {
-		base = own
+	if len(k.base) == 0 {
+		k.base = k.own
 	}
-	if len(base) == 0 {
-		err = fmt.Errorf("no encryption key configured; use -r, [recipients], or an age identity")
+	if len(k.base) == 0 {
+		return k, fmt.Errorf("no encryption key configured; use -r, [recipients], or an age identity")
 	}
-	return
+	return k, nil
 }
 
-func fileRecipients(root, path string, base []string) ([]string, []string, error) {
-	return fileRecipientsFromRules(root, path, base, nil)
+// fileTarget describes the recipients of one protected file.
+type fileTarget struct {
+	values     []string
+	rules      []string // Rule files that apply to the file.
+	recipients []age.Recipient
 }
 
-func fileRecipientsFromRules(root, path string, base []string, ruleContents map[string][]byte) ([]string, []string, error) {
-	values := append([]string(nil), base...)
-	var rules []string
-	for parent := filepath.Dir(path); inside(root, parent); parent = filepath.Dir(parent) {
+func (k keys) target(root, path string, ruleContents map[string][]byte) (fileTarget, error) {
+	target := fileTarget{values: append([]string(nil), k.base...)}
+	for _, parent := range ancestorDirs(root, filepath.Dir(path)) {
 		rule := filepath.Join(parent, ".gitage")
-		rules = append(rules, rule)
+		target.rules = append(target.rules, rule)
 		if parent != root {
-			extra, err := recipientsFromRules(rule, ruleContents)
+			extra, err := ruleRecipients(rule, ruleContents)
 			if err != nil {
-				return nil, nil, err
+				return target, err
 			}
-			values = append(values, extra...)
-		}
-		if parent == root {
-			break
+			target.values = append(target.values, extra...)
 		}
 	}
-	return values, rules, nil
+	var err error
+	target.recipients, err = parseRecipients(target.values)
+	return target, err
 }
 
-func recipientsFromRules(path string, rules map[string][]byte) ([]string, error) {
-	if rules == nil {
-		return ruleRecipients(path)
+// encrypt reuses unchanged ciphertext from Git when reuse is allowed.
+func (k keys) encrypt(root, path string, target fileTarget, plaintext []byte, reuse bool) ([]byte, error) {
+	if reuse && !k.external {
+		if ciphertext := reusableCiphertext(root, path, target.rules, plaintext, k.identities); ciphertext != nil {
+			return ciphertext, nil
+		}
 	}
-	_, recipients, err := parseRules(path, rules[path])
+	return encryptContent(plaintext, target.recipients)
+}
+
+// ruleRecipients reads a rule file from rules, or from disk when rules is nil.
+func ruleRecipients(path string, rules map[string][]byte) ([]string, error) {
+	content := rules[path]
+	if rules == nil {
+		var err error
+		if content, err = readRuleFile(path); err != nil {
+			return nil, err
+		}
+	}
+	_, recipients, err := parseRules(path, content)
 	return recipients, err
 }
 
@@ -236,25 +240,6 @@ func containsRecipient(values, own []string) bool {
 	return false
 }
 
-func ruleRecipients(path string) ([]string, error) {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, nil
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	_, recipients, err := parseRules(path, content)
-	return recipients, err
-}
-
 func parseRecipients(values []string) ([]age.Recipient, error) {
 	var recipients []age.Recipient
 	seen := map[string]bool{}
@@ -283,28 +268,27 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 		return nil
 	}
 	relative, _ := filepath.Rel(root, path)
-	var stale [][]byte
 	// Even staged ciphertext may still use old recipients after a rules edit.
+	if !rulesMatchRevision(root, rules, "HEAD") {
+		return nil
+	}
+	var stale [][]byte
 	for _, rule := range rules {
-		rulePath, _ := filepath.Rel(root, rule)
-		current, readErr := os.ReadFile(rule)
-		previous, gitErr := exec.Command("git", "-C", root, "show", "HEAD:"+filepath.ToSlash(rulePath)).Output()
-		if errors.Is(readErr, os.ErrNotExist) && gitErr != nil {
-			continue
-		}
-		if readErr != nil || gitErr != nil || !bytes.Equal(current, previous) {
-			return nil
+		current, err := os.ReadFile(rule)
+		if err != nil {
+			continue // Absent both here and in HEAD.
 		}
 		_, currentRecipients, err := parseRules(rule, current)
 		if err != nil {
 			return nil
 		}
-		history, err := exec.Command("git", "-C", root, "log", "--format=%H", "--", filepath.ToSlash(rulePath)).Output()
+		rulePath, _ := filepath.Rel(root, rule)
+		history, err := git(root, "log", "--format=%H", "--", filepath.ToSlash(rulePath))
 		if err != nil {
 			return nil
 		}
 		for _, revision := range strings.Fields(string(history)) {
-			old, err := exec.Command("git", "-C", root, "show", revision+":"+filepath.ToSlash(rulePath)).Output()
+			old, err := git(root, "show", revision+":"+filepath.ToSlash(rulePath))
 			if err != nil {
 				return nil
 			}
@@ -315,7 +299,7 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 			if sameRecipients(currentRecipients, oldRecipients) {
 				continue
 			}
-			if ciphertext, err := exec.Command("git", "-C", root, "show", revision+":"+filepath.ToSlash(relative)).Output(); err == nil {
+			if ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative)); err == nil {
 				stale = append(stale, ciphertext)
 			}
 			break
@@ -327,34 +311,11 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 		if strings.HasPrefix(revision, ":") {
 			ruleRevision = ""
 		}
-		unchanged := true
-		for _, rule := range rules {
-			rulePath, _ := filepath.Rel(root, rule)
-			current, readErr := os.ReadFile(rule)
-			previous, gitErr := exec.Command("git", "-C", root, "show", ruleRevision+":"+filepath.ToSlash(rulePath)).Output()
-			if errors.Is(readErr, os.ErrNotExist) && gitErr != nil {
-				continue
-			}
-			if readErr != nil || gitErr != nil || !bytes.Equal(current, previous) {
-				unchanged = false
-				break
-			}
-		}
-		if !unchanged {
+		if !rulesMatchRevision(root, rules, ruleRevision) {
 			continue
 		}
-		ciphertext, err := exec.Command("git", "-C", root, "show", revision+":"+filepath.ToSlash(relative)).Output()
-		if err != nil {
-			continue
-		}
-		isStale := false
-		for _, old := range stale {
-			if bytes.Equal(old, ciphertext) {
-				isStale = true
-				break
-			}
-		}
-		if isStale {
+		ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative))
+		if err != nil || slices.ContainsFunc(stale, func(old []byte) bool { return bytes.Equal(old, ciphertext) }) {
 			continue
 		}
 		decrypted, err := decryptContent(ciphertext, identities)
@@ -365,16 +326,27 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 	return nil
 }
 
-func sameRecipients(first, second []string) bool {
-	values := map[string]bool{}
-	for _, value := range first {
-		values[value] = true
-	}
-	for _, value := range second {
-		if !values[value] {
+// rulesMatchRevision reports whether each working rule file equals its
+// version at revision, counting a file absent from both as equal.
+func rulesMatchRevision(root string, rules []string, revision string) bool {
+	for _, rule := range rules {
+		rulePath, _ := filepath.Rel(root, rule)
+		current, readErr := os.ReadFile(rule)
+		previous, gitErr := git(root, "show", revision+":"+filepath.ToSlash(rulePath))
+		if errors.Is(readErr, os.ErrNotExist) && gitErr != nil {
+			continue
+		}
+		if readErr != nil || gitErr != nil || !bytes.Equal(current, previous) {
 			return false
 		}
-		delete(values, value)
 	}
-	return len(values) == 0
+	return true
+}
+
+// sameRecipients compares recipient lists as sets.
+func sameRecipients(first, second []string) bool {
+	first, second = slices.Clone(first), slices.Clone(second)
+	slices.Sort(first)
+	slices.Sort(second)
+	return slices.Equal(slices.Compact(first), slices.Compact(second))
 }

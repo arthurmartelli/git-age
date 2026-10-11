@@ -99,7 +99,7 @@ func TestCheckCached(t *testing.T) {
 			t.Setenv("GIT_AGE_ALLOW_REMOVE", "")
 			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 			writeStatusFile(t, directory, "secret.env", "secret")
-			checkGit(t, directory, "add", ".gitage", "secret.env")
+			runGit(t, directory, "add", ".gitage", "secret.env")
 			code, diagnostic := 1, "protected files are staged as plaintext"
 			switch scenario {
 			case "staged plaintext", "staged encrypted":
@@ -109,7 +109,7 @@ func TestCheckCached(t *testing.T) {
 				}
 				writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "secret", false)))
 				if scenario == "staged encrypted" {
-					checkGit(t, directory, "add", "secret.env")
+					runGit(t, directory, "add", "secret.env")
 					writeStatusFile(t, directory, "secret.env", "secret")
 					code, diagnostic = 0, ""
 				}
@@ -117,19 +117,19 @@ func TestCheckCached(t *testing.T) {
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.txt\n")
 			case "unstaged rules":
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.txt\n")
-				checkGit(t, directory, "add", ".gitage")
+				runGit(t, directory, "add", ".gitage")
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 				code, diagnostic = 0, ""
 			case "nested negation":
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.txt\n")
 				writeStatusFile(t, directory, "sub/.gitage", "[files]\n!public.txt\n*.env\n")
 				writeStatusFile(t, directory, "sub/public.txt", "public")
-				checkGit(t, directory, "add", ".gitage", "sub")
+				runGit(t, directory, "add", ".gitage", "sub")
 				code, diagnostic = 0, ""
 			case "unchanged plaintext":
-				checkGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline")
+				runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline")
 				writeStatusFile(t, directory, "notes.txt", "new")
-				checkGit(t, directory, "add", "notes.txt")
+				runGit(t, directory, "add", "notes.txt")
 				code, diagnostic = 0, ""
 			case "ignored tracked file":
 				writeStatusFile(t, directory, ".gitignore", "secret.env\n")
@@ -145,15 +145,15 @@ func TestCheckCached(t *testing.T) {
 					diagnostic = "refusing to commit private age keys"
 				}
 				writeStatusFile(t, directory, path, content)
-				checkGit(t, directory, "add", "-f", ".gitage", path)
+				runGit(t, directory, "add", "-f", ".gitage", path)
 				if scenario == "allow private key" {
 					t.Setenv("GIT_AGE_ALLOW_PRIVATE_KEYS", "yes")
 					code, diagnostic = 0, ""
 				}
 			case "case insensitive":
-				checkGit(t, directory, "config", "core.ignoreCase", "true")
+				runGit(t, directory, "config", "core.ignoreCase", "true")
 				writeStatusFile(t, directory, ".gitage", "[files]\n*.ENV\n")
-				checkGit(t, directory, "add", ".gitage")
+				runGit(t, directory, "add", ".gitage")
 			case "subdirectory":
 				if err := os.Mkdir(filepath.Join(directory, "sub"), 0700); err != nil {
 					t.Fatal(err)
@@ -164,8 +164,8 @@ func TestCheckCached(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "symlink":
-				oid := strings.TrimSpace(checkGit(t, directory, "rev-parse", ":secret.env"))
-				checkGit(t, directory, "update-index", "--cacheinfo", "120000,"+oid+",secret.env")
+				oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", ":secret.env")))
+				runGit(t, directory, "update-index", "--cacheinfo", "120000,"+oid+",secret.env")
 				code, diagnostic = 0, ""
 			}
 			got, output, stderr := runCheck(directory, "--cached")
@@ -190,18 +190,18 @@ func TestCheckCachedRemovedRules(t *testing.T) {
 			t.Setenv("GIT_AGE_ALLOW_REMOVE", "")
 			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 			writeStatusFile(t, directory, "sub/.gitage", "[files]\n*.env\n")
-			checkGit(t, directory, "add", ".")
-			checkGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "rules")
+			runGit(t, directory, "add", ".")
+			runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "rules")
 			if scenario == "symlink" {
-				oid := strings.TrimSpace(checkGit(t, directory, "rev-parse", ":sub/.gitage"))
-				checkGit(t, directory, "update-index", "--cacheinfo", "120000,"+oid+",sub/.gitage")
+				oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", ":sub/.gitage")))
+				runGit(t, directory, "update-index", "--cacheinfo", "120000,"+oid+",sub/.gitage")
 			} else if scenario == "moved" {
-				checkGit(t, directory, "mv", "sub/.gitage", "sub/moved")
+				runGit(t, directory, "mv", "sub/.gitage", "sub/moved")
 			} else {
-				checkGit(t, directory, "rm", "sub/.gitage")
+				runGit(t, directory, "rm", "sub/.gitage")
 			}
 			if scenario == "last rule" || scenario == "allow last rule" {
-				checkGit(t, directory, "rm", ".gitage")
+				runGit(t, directory, "rm", ".gitage")
 			}
 			if scenario == "allowed" || scenario == "allow last rule" {
 				t.Setenv("GIT_AGE_ALLOW_REMOVE", "1")
@@ -234,10 +234,10 @@ func TestCheckCachedErrors(t *testing.T) {
 					writeStatusFile(t, directory, ".gitage", "[typo]\n")
 				}
 				if scenario != "no staged rules" {
-					checkGit(t, directory, "add", ".gitage")
+					runGit(t, directory, "add", ".gitage")
 				}
 				if scenario == "unmerged" {
-					oid := strings.TrimSpace(checkGit(t, directory, "rev-parse", ":.gitage"))
+					oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", ":.gitage")))
 					cmd := exec.Command("git", "-C", directory, "update-index", "--index-info")
 					cmd.Stdin = strings.NewReader("0 " + strings.Repeat("0", 40) + "\t.gitage\n100644 " + oid + " 1\t.gitage\n")
 					if output, err := cmd.CombinedOutput(); err != nil {
@@ -261,7 +261,7 @@ func TestCheckReadOnly(t *testing.T) {
 	initKeygenRepo(t, directory)
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 	writeStatusFile(t, directory, "secret.env", "secret")
-	checkGit(t, directory, "add", ".")
+	runGit(t, directory, "add", ".")
 	snapshot := func() map[string]string {
 		files := map[string]string{}
 		err := filepath.WalkDir(directory, func(path string, entry os.DirEntry, err error) error {
@@ -299,13 +299,4 @@ func runCheck(directory string, args ...string) (int, string, string) {
 	var output, stderr bytes.Buffer
 	code := Run(append([]string{"-C", directory, "check"}, args...), &output, &stderr)
 	return code, output.String(), stderr.String()
-}
-
-func checkGit(t *testing.T, directory string, args ...string) string {
-	t.Helper()
-	output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, output)
-	}
-	return string(output)
 }

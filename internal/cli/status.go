@@ -31,7 +31,7 @@ func newStatusCommand(options *globalOptions) *cobra.Command {
 						path = quoteStatusPath(path)
 					}
 					line = fmt.Sprintf("%s. %s%s", file.State[:1], path, terminator)
-					if file.State == "UNKNOWN" {
+					if file.State == repository.Unknown {
 						line = "?" + line[1:]
 					}
 				} else {

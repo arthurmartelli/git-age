@@ -1,36 +1,22 @@
 package repository
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // Clean reuses ciphertext for unchanged plaintext. Ordinary edits pass through
 // for the pre-commit hook; encrypted conflict resolutions must be encrypted here
 // because rebase and cherry-pick can commit without running that hook.
 func Clean(directory, path string, content []byte) ([]byte, error) {
-	if contentState(content) == "LOCKED" {
+	if contentState(content) == Locked {
 		return content, nil
 	}
-	directory, err := filepath.Abs(directory)
-	if err != nil {
+	directory, root, inGit, err := resolveDirectory(directory)
+	if err != nil || !inGit {
 		return content, nil
 	}
-	directory, err = filepath.EvalSymlinks(directory)
-	if err != nil {
-		return content, nil
-	}
-	root, err := gitRoot(directory)
-	if err != nil || root == "" {
-		return content, nil
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(directory, path)
-	}
+	path = absolutePath(directory, path)
 	if !inside(root, path) {
 		return content, nil
 	}
@@ -39,7 +25,7 @@ func Clean(directory, path string, content []byte) ([]byte, error) {
 	cleaned, err := cleanProtectedContent(directory, root, path, content, conflicted)
 	if err != nil {
 		if conflicted {
-			return nil, fmt.Errorf("cannot encrypt resolved conflict %s: %s\n  Refusing to stage it as plaintext; fix the problem, then `git add` it again.", filepath.ToSlash(relative), strings.SplitN(err.Error(), "\n", 2)[0])
+			return nil, fmt.Errorf("cannot encrypt resolved conflict %s: %s\n  Refusing to stage it as plaintext; fix the problem, then `git add` it again.", filepath.ToSlash(relative), FirstLine(err))
 		}
 		// A required filter must not break git status when identities or rules
 		// are unavailable. Returning plaintext keeps the file visibly modified.
@@ -56,15 +42,11 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 	if !protected {
 		return content, nil
 	}
-	identities, _, base, external, err := encryptionKeys(directory, root, nil, nil)
+	keys, err := loadKeys(directory, root, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
-	values, ruleFiles, err := fileRecipients(root, path, base)
-	if err != nil {
-		return nil, err
-	}
-	recipients, err := parseRecipients(values)
+	target, err := keys.target(root, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +54,12 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 		if err := checkRecipientTrust(directory); err != nil {
 			return nil, err
 		}
+		return keys.encrypt(root, path, target, content, true)
 	}
-	if !external {
-		if ciphertext := reusableCiphertext(root, path, ruleFiles, content, identities); ciphertext != nil {
+	if !keys.external {
+		if ciphertext := reusableCiphertext(root, path, target.rules, content, keys.identities); ciphertext != nil {
 			return ciphertext, nil
 		}
-	}
-	if conflicted {
-		return encryptContent(content, recipients)
 	}
 	return content, nil
 }
@@ -88,20 +68,14 @@ func protectedPath(root, path string) (bool, error) {
 	// Git attributes may over-match. Only rules above this path determine
 	// protection, and unrelated malformed rule files must not block this path.
 	rules := map[string][]byte{}
-	for parent := filepath.Dir(path); inside(root, parent); parent = filepath.Dir(parent) {
+	for _, parent := range ancestorDirs(root, filepath.Dir(path)) {
 		rule := filepath.Join(parent, ".gitage")
-		info, err := os.Lstat(rule)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
+		content, err := readRuleFile(rule)
+		if err != nil {
 			return false, err
 		}
-		if err == nil && info.Mode().IsRegular() {
-			rules[rule], err = os.ReadFile(rule)
-			if err != nil {
-				return false, err
-			}
-		}
-		if parent == root {
-			break
+		if content != nil {
+			rules[rule] = content
 		}
 	}
 	if len(rules) == 0 {
@@ -115,12 +89,12 @@ func protectedPath(root, path string) (bool, error) {
 }
 
 func conflictedCiphertext(root, path string) bool {
-	if _, err := exec.Command("git", "-C", root, "show", ":0:"+path).Output(); err == nil {
+	if _, err := git(root, "show", ":0:"+path); err == nil {
 		return false
 	}
 	for _, stage := range []string{"2", "3"} {
-		content, err := exec.Command("git", "-C", root, "show", ":"+stage+":"+path).Output()
-		if err == nil && contentState(content) == "LOCKED" {
+		content, err := git(root, "show", ":"+stage+":"+path)
+		if err == nil && contentState(content) == Locked {
 			return true
 		}
 	}

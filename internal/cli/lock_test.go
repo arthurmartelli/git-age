@@ -46,7 +46,7 @@ func TestLock(t *testing.T) {
 			writeStatusFile(t, directory, "a.env", "secret\x00bytes\n")
 			writeStatusFile(t, directory, "b.env", "untouched")
 			args = append(args, "a.env")
-			if _, err := runLock(directory, args...); err != nil {
+			if _, err := runCommand(directory, "lock", args...); err != nil {
 				t.Fatal(err)
 			}
 			ciphertext, err := os.ReadFile(filepath.Join(directory, "a.env"))
@@ -67,7 +67,7 @@ func TestLock(t *testing.T) {
 			if info, err := os.Stat(filepath.Join(directory, "a.env")); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 				t.Fatalf("permissions: %v, %v", info, err)
 			}
-			if output, err := runLock(directory, append([]string{"-v"}, args...)...); err != nil || !strings.Contains(output, "already locked: a.env") {
+			if output, err := runCommand(directory, "lock", append([]string{"-v"}, args...)...); err != nil || !strings.Contains(output, "already locked: a.env") {
 				t.Fatalf("second lock: %q, %v", output, err)
 			}
 			if after, _ := os.ReadFile(filepath.Join(directory, "a.env")); !bytes.Equal(after, ciphertext) {
@@ -81,7 +81,7 @@ func TestLockDryRun(t *testing.T) {
 	directory := t.TempDir()
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
 	writeStatusFile(t, directory, "a.env", "secret")
-	output, err := runLock(directory, "-n")
+	output, err := runCommand(directory, "lock", "-n")
 	if err != nil || output != "would lock: a.env\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
 	}
@@ -111,7 +111,7 @@ func TestLockInvalidRecipientsChangeNothing(t *testing.T) {
 			for _, path := range []string{"a.env", "sub/b.env"} {
 				writeStatusFile(t, directory, path, "secret")
 			}
-			if _, err := runLock(directory); err == nil {
+			if _, err := runCommand(directory, "lock"); err == nil {
 				t.Fatal("expected recipient error")
 			}
 			for _, path := range []string{"a.env", "sub/b.env"} {
@@ -138,7 +138,7 @@ func TestLockIgnoresSymlinkedRules(t *testing.T) {
 	writeStatusFile(t, directory, "sub/.gitage", "[files]\nx.env\n")
 	writeStatusFile(t, directory, "sub/x.env", "secret\n")
 	writeStatusFile(t, directory, "public.env", "public\n")
-	cleanGit(t, directory, "config", "age.keyFile", filepath.Join(external, "identity.key"))
+	runGit(t, directory, "config", "age.keyFile", filepath.Join(external, "identity.key"))
 	// Reproduce `git -c age.keyFile= age lock`, clearing the configured key.
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "age.keyFile")
@@ -154,7 +154,7 @@ func TestLockIgnoresSymlinkedRules(t *testing.T) {
 	}
 	// An explicit identity encrypts the nested file to itself, without granting
 	// access to the recipient or matching the pattern in the symlinked rules.
-	if _, err := runLock(directory, "-i", filepath.Join(external, "identity.key")); err != nil {
+	if _, err := runCommand(directory, "lock", "-i", filepath.Join(external, "identity.key")); err != nil {
 		t.Fatal(err)
 	}
 	ciphertext, err := os.ReadFile(filepath.Join(directory, "sub/x.env"))
@@ -168,16 +168,6 @@ func TestLockIgnoresSymlinkedRules(t *testing.T) {
 	if content, err := os.ReadFile(filepath.Join(directory, "public.env")); err != nil || string(content) != "public\n" {
 		t.Fatal("used a pattern from symlinked rules")
 	}
-}
-
-func runLock(directory string, args ...string) (string, error) {
-	var output bytes.Buffer
-	root := newRootCommand()
-	root.SetOut(&output)
-	root.SetErr(&output)
-	root.SetArgs(append([]string{"-C", directory, "lock"}, args...))
-	err := root.Execute()
-	return output.String(), err
 }
 
 func TestLockNestedRecipients(t *testing.T) {
@@ -208,7 +198,7 @@ func TestLockNestedRecipients(t *testing.T) {
 			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+first.Recipient().String()+"\n")
 			writeStatusFile(t, directory, "sub/.gitage", "[recipients]\n"+second.Recipient().String()+"\n")
 			writeStatusFile(t, directory, "sub/a.env", "shared secret")
-			if _, err := runLock(filepath.Join(directory, "sub")); err != nil {
+			if _, err := runCommand(filepath.Join(directory, "sub"), "lock"); err != nil {
 				t.Fatal(err)
 			}
 			content, err := os.ReadFile(filepath.Join(directory, "sub/a.env"))
@@ -253,7 +243,7 @@ func TestLockReusesCiphertext(t *testing.T) {
 			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
 			writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
 			writeStatusFile(t, directory, "a.env", "secret")
-			if _, err := runLock(directory); err != nil {
+			if _, err := runCommand(directory, "lock"); err != nil {
 				t.Fatal(err)
 			}
 			before, err := os.ReadFile(filepath.Join(directory, "a.env"))
@@ -266,7 +256,7 @@ func TestLockReusesCiphertext(t *testing.T) {
 				}
 			}
 			writeStatusFile(t, directory, "a.env", "secret")
-			if _, err := runLock(directory); err != nil {
+			if _, err := runCommand(directory, "lock"); err != nil {
 				t.Fatal(err)
 			}
 			after, err := os.ReadFile(filepath.Join(directory, "a.env"))
@@ -277,7 +267,7 @@ func TestLockReusesCiphertext(t *testing.T) {
 				t.Fatal("unchanged plaintext did not reuse ciphertext")
 			}
 			writeStatusFile(t, directory, "a.env", "secret")
-			if _, err := runLock(directory, "--no-reuse"); err != nil {
+			if _, err := runCommand(directory, "lock", "--no-reuse"); err != nil {
 				t.Fatal(err)
 			}
 			after, err = os.ReadFile(filepath.Join(directory, "a.env"))
@@ -303,7 +293,7 @@ func TestLockReusesCiphertext(t *testing.T) {
 					}
 				}
 				writeStatusFile(t, directory, "a.env", "secret")
-				if _, err := runLock(directory); err != nil {
+				if _, err := runCommand(directory, "lock"); err != nil {
 					t.Fatal(err)
 				}
 				content, err := os.ReadFile(filepath.Join(directory, "a.env"))

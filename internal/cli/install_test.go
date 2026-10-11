@@ -22,13 +22,13 @@ func TestInstall(t *testing.T) {
 			writeStatusFile(t, directory, "sub/.keep", "")
 			workingDirectory := directory
 			if scenario == "linked worktree" {
-				cleanGit(t, directory, "config", "user.name", "Test")
-				cleanGit(t, directory, "config", "user.email", "test@example.com")
-				cleanGit(t, directory, "config", "commit.gpgsign", "false")
-				cleanGit(t, directory, "add", ".gitage")
-				cleanGit(t, directory, "commit", "-qm", "rules")
+				runGit(t, directory, "config", "user.name", "Test")
+				runGit(t, directory, "config", "user.email", "test@example.com")
+				runGit(t, directory, "config", "commit.gpgsign", "false")
+				runGit(t, directory, "add", ".gitage")
+				runGit(t, directory, "commit", "-qm", "rules")
 				workingDirectory = filepath.Join(t.TempDir(), "linked")
-				cleanGit(t, directory, "worktree", "add", "-qb", "linked", workingDirectory)
+				runGit(t, directory, "worktree", "add", "-qb", "linked", workingDirectory)
 			} else if scenario == "subdirectory" {
 				workingDirectory = filepath.Join(directory, "sub")
 			} else if scenario == "no rules" {
@@ -38,15 +38,15 @@ func TestInstall(t *testing.T) {
 			}
 			hooks := installGitPath(t, directory, "hooks")
 			if scenario == "relative hooks path" {
-				cleanGit(t, directory, "config", "core.hooksPath", "custom hooks")
+				runGit(t, directory, "config", "core.hooksPath", "custom hooks")
 				hooks = filepath.Join(directory, "custom hooks")
 				workingDirectory = filepath.Join(directory, "sub")
 			} else if scenario == "absolute hooks path" {
 				hooks = filepath.Join(t.TempDir(), "custom hooks")
-				cleanGit(t, directory, "config", "core.hooksPath", hooks)
+				runGit(t, directory, "config", "core.hooksPath", hooks)
 			}
-			beforeIndex := cleanGit(t, directory, "ls-files", "--stage", "-z")
-			output, err := runInstall(workingDirectory, "--mode", "always-lock", "--unlock-after-commit")
+			beforeIndex := runGit(t, directory, "ls-files", "--stage", "-z")
+			output, err := runCommand(workingDirectory, "install", "--mode", "always-lock", "--unlock-after-commit")
 			if err != nil || !strings.Contains(output, "Installed git-age hooks:") {
 				t.Fatalf("install: %v, %s", err, output)
 			}
@@ -70,7 +70,7 @@ func TestInstall(t *testing.T) {
 				"merge.age.driver": "git age merge --path %P --marker-size %L %O %A %B",
 				"filter.age.clean": "git age clean %f", "filter.age.smudge": "cat", "filter.age.required": "true",
 			} {
-				got := strings.TrimSpace(string(cleanGit(t, directory, "config", "--local", "--get", key)))
+				got := strings.TrimSpace(string(runGit(t, directory, "config", "--local", "--get", key)))
 				if got != want {
 					t.Errorf("%s: got %q, want %q", key, got, want)
 				}
@@ -79,7 +79,7 @@ func TestInstall(t *testing.T) {
 			if _, err := os.Stat(attributes); err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(beforeIndex, cleanGit(t, directory, "ls-files", "--stage", "-z")) {
+			if !bytes.Equal(beforeIndex, runGit(t, directory, "ls-files", "--stage", "-z")) {
 				t.Fatal("install changed the index")
 			}
 		})
@@ -93,7 +93,7 @@ func TestInstallAttributes(t *testing.T) {
 	writeStatusFile(t, directory, "nested [x]/.gitage", "[files]\n*.key\n/only.here\nrelative/path\n")
 	writeStatusFile(t, directory, "ignored/.gitage", "[unknown]\n")
 	writeStatusFile(t, directory, ".gitignore", "ignored/\n")
-	if _, err := runInstall(directory); err != nil {
+	if _, err := runCommand(directory, "install"); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct {
@@ -109,7 +109,7 @@ func TestInstallAttributes(t *testing.T) {
 		{"public.env", true}, // Attribute patterns over-match negations, like the previous installer.
 		{"readme.txt", false},
 	} {
-		output := cleanGit(t, directory, "check-attr", "diff", "filter", "merge", "--", test.path)
+		output := runGit(t, directory, "check-attr", "diff", "filter", "merge", "--", test.path)
 		want := "unspecified"
 		if test.want {
 			want = "age"
@@ -121,7 +121,7 @@ func TestInstallAttributes(t *testing.T) {
 		}
 	}
 	// NUL-delimited output checks control bytes without Git's display quoting.
-	output := cleanGit(t, directory, "check-attr", "-z", "diff", "--", "control\x01name")
+	output := runGit(t, directory, "check-attr", "-z", "diff", "--", "control\x01name")
 	if string(output) != "control\x01name\x00diff\x00age\x00" {
 		t.Fatalf("control byte pattern: %q", output)
 	}
@@ -146,44 +146,44 @@ func TestInstallGitIntegration(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	directory, identity, _ := cleanFixture(t, []byte("A=1\nB=1\nC=1\n"), false)
-	cleanGit(t, directory, "branch", "ours")
-	cleanGit(t, directory, "checkout", "-qb", "theirs")
+	runGit(t, directory, "branch", "ours")
+	runGit(t, directory, "checkout", "-qb", "theirs")
 	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "A=1\nB=1\nC=2\n", false)))
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "theirs")
-	cleanGit(t, directory, "checkout", "-q", "ours")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "-qm", "theirs")
+	runGit(t, directory, "checkout", "-q", "ours")
 	ours := encryptUnlockFixture(t, identity, "A=2\nB=1\nC=1\n", false)
 	writeStatusFile(t, directory, "secret.env", string(ours))
-	cleanGit(t, directory, "add", "secret.env")
-	cleanGit(t, directory, "commit", "-qm", "ours")
-	cleanGit(t, directory, "config", "diff.age.cachetextconv", "true")
+	runGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "commit", "-qm", "ours")
+	runGit(t, directory, "config", "diff.age.cachetextconv", "true")
 	output, err := exec.Command(executable, "-C", directory, "install", "--mode=always-lock").CombinedOutput()
 	if err != nil {
 		t.Fatalf("install binary: %v, %s", err, output)
 	}
-	if text := cleanGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env"); string(text) != "A=2\nB=1\nC=1\n" {
+	if text := runGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env"); string(text) != "A=2\nB=1\nC=1\n" {
 		t.Fatalf("installed diff driver: %q", text)
 	}
 	writeStatusFile(t, directory, "secret.env", "A=2\nB=1\nC=1\n")
-	oid := strings.TrimSpace(string(cleanGit(t, directory, "rev-parse", "HEAD:secret.env")))
-	cleanGit(t, directory, "update-index", "--cacheinfo", "100644,"+oid+",secret.env")
-	if status := cleanGit(t, directory, "status", "--porcelain", "--", "secret.env"); len(status) != 0 {
+	oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD:secret.env")))
+	runGit(t, directory, "update-index", "--cacheinfo", "100644,"+oid+",secret.env")
+	if status := runGit(t, directory, "status", "--porcelain", "--", "secret.env"); len(status) != 0 {
 		t.Fatalf("installed filter shows unchanged plaintext as modified: %s", status)
 	}
-	cleanGit(t, directory, "add", "secret.env")
-	if staged := cleanGit(t, directory, "show", ":secret.env"); !bytes.Equal(staged, ours) {
+	runGit(t, directory, "add", "secret.env")
+	if staged := runGit(t, directory, "show", ":secret.env"); !bytes.Equal(staged, ours) {
 		t.Fatal("installed filter did not reuse ciphertext")
 	}
 	writeStatusFile(t, directory, "secret.env", string(ours))
-	cleanGit(t, directory, "add", "secret.env")
+	runGit(t, directory, "add", "secret.env")
 	// Hook policy handlers are a separate porting task; exercise the installed
 	// merge driver with hooks disabled for this Git operation only.
-	cleanGit(t, directory, "-c", "core.hooksPath="+t.TempDir(), "merge", "--no-edit", "theirs")
-	assertCleanDecrypts(t, cleanGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("A=2\nB=1\nC=2\n"))
-	if _, err := runInstall(directory, "--no-diff", "--no-filter", "--no-merge"); err != nil {
+	runGit(t, directory, "-c", "core.hooksPath="+t.TempDir(), "merge", "--no-edit", "theirs")
+	assertCleanDecrypts(t, runGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("A=2\nB=1\nC=2\n"))
+	if _, err := runCommand(directory, "install", "--no-diff", "--no-filter", "--no-merge"); err != nil {
 		t.Fatal(err)
 	}
-	if text := cleanGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env"); bytes.HasPrefix(text, []byte("A=2")) {
+	if text := runGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env"); bytes.HasPrefix(text, []byte("A=2")) {
 		t.Fatal("disabled diff still decrypts")
 	}
 }
@@ -191,7 +191,7 @@ func TestInstallGitIntegration(t *testing.T) {
 func TestInstallHookEntrypoints(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	if _, err := runInstall(directory); err != nil {
+	if _, err := runCommand(directory, "install"); err != nil {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
@@ -223,10 +223,10 @@ func TestInstallUpdateAndDisable(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	cleanGit(t, directory, "config", "age.hookMode", "abort")
-	cleanGit(t, directory, "config", "age.unlockAfterCommit", "true")
-	cleanGit(t, directory, "config", "age.keyFile", "keep.key")
-	cleanGit(t, directory, "config", "age.recipient", "age1keep")
+	runGit(t, directory, "config", "age.hookMode", "abort")
+	runGit(t, directory, "config", "age.unlockAfterCommit", "true")
+	runGit(t, directory, "config", "age.keyFile", "keep.key")
+	runGit(t, directory, "config", "age.recipient", "age1keep")
 	attributes := installGitPath(t, directory, "info/attributes")
 	writeStatusFile(t, filepath.Dir(attributes), "attributes", "# user prefix\r\n*.txt diff=custom\r\n")
 	if runtime.GOOS != "windows" {
@@ -234,11 +234,11 @@ func TestInstallUpdateAndDisable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := runInstall(directory); err != nil {
+	if _, err := runCommand(directory, "install"); err != nil {
 		t.Fatal(err)
 	}
 	before := installSnapshot(t, directory)
-	if _, err := runInstall(directory); err != nil {
+	if _, err := runCommand(directory, "install"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(before, installSnapshot(t, directory)) {
@@ -253,20 +253,20 @@ func TestInstallUpdateAndDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeStatusFile(t, directory, ".gitage", "[files]\n*.secret\n")
-	if _, err := runInstall(directory, "--no-unlock-after-commit"); err != nil {
+	if _, err := runCommand(directory, "install", "--no-unlock-after-commit"); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(attributes)
 	if err != nil || !bytes.HasPrefix(content, []byte("# user prefix\r\n*.txt diff=custom\r\n")) || !bytes.HasSuffix(content, []byte("*.md diff=markdown\r\n# user suffix\r\n")) || bytes.Contains(content, []byte("*.env")) || !bytes.Contains(content, []byte("*.secret")) {
 		t.Fatalf("attribute update: %v, %q", err, content)
 	}
-	if mode := strings.TrimSpace(string(cleanGit(t, directory, "config", "age.hookMode"))); mode != "abort" {
+	if mode := strings.TrimSpace(string(runGit(t, directory, "config", "age.hookMode"))); mode != "abort" {
 		t.Fatalf("overwrote policy: %q", mode)
 	}
-	if unlock := strings.TrimSpace(string(cleanGit(t, directory, "config", "age.unlockAfterCommit"))); unlock != "false" {
+	if unlock := strings.TrimSpace(string(runGit(t, directory, "config", "age.unlockAfterCommit"))); unlock != "false" {
 		t.Fatalf("unlock flag: %q", unlock)
 	}
-	if _, err := runInstall(directory, "--no-diff", "--no-merge", "--no-filter"); err != nil {
+	if _, err := runCommand(directory, "install", "--no-diff", "--no-merge", "--no-filter"); err != nil {
 		t.Fatal(err)
 	}
 	content, err = os.ReadFile(attributes)
@@ -291,11 +291,11 @@ func TestInstallUpdateAndDisable(t *testing.T) {
 		}
 	}
 	for _, key := range []string{"age.keyFile", "age.recipient", "age.hookMode", "age.unlockAfterCommit"} {
-		cleanGit(t, directory, "config", "--local", "--get", key)
+		runGit(t, directory, "config", "--local", "--get", key)
 	}
 	hooks := installGitPath(t, directory, "hooks")
 	writeStatusFile(t, hooks, "post-checkout", "#!/bin/sh\n# other tool\n")
-	if _, err := runInstall(directory, "--no-diff", "--no-merge", "--no-filter"); err != nil {
+	if _, err := runCommand(directory, "install", "--no-diff", "--no-merge", "--no-filter"); err != nil {
 		t.Fatal(err)
 	}
 	if content, err := os.ReadFile(filepath.Join(hooks, "post-checkout")); err != nil || string(content) != "#!/bin/sh\n# other tool\n" {
@@ -320,10 +320,10 @@ func TestInstallDriverFlags(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
 			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-			if _, err := runInstall(directory); err != nil {
+			if _, err := runCommand(directory, "install"); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := runInstall(directory, test.args...); err != nil {
+			if _, err := runCommand(directory, "install", test.args...); err != nil {
 				t.Fatal(err)
 			}
 			for key, enabled := range map[string]bool{
@@ -364,23 +364,23 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 			directory, identity, ciphertext := cleanFixture(t, []byte("original\n"), false)
 			plaintext := "original\n"
 			if disabled == "merge" {
-				cleanGit(t, directory, "branch", "ours")
-				cleanGit(t, directory, "checkout", "-qb", "theirs")
+				runGit(t, directory, "branch", "ours")
+				runGit(t, directory, "checkout", "-qb", "theirs")
 				writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "theirs\n", false)))
-				cleanGit(t, directory, "add", "secret.env")
-				cleanGit(t, directory, "commit", "-qm", "theirs")
-				cleanGit(t, directory, "checkout", "-q", "ours")
+				runGit(t, directory, "add", "secret.env")
+				runGit(t, directory, "commit", "-qm", "theirs")
+				runGit(t, directory, "checkout", "-q", "ours")
 				plaintext = "ours\n"
 				ciphertext = encryptUnlockFixture(t, identity, plaintext, false)
 				writeStatusFile(t, directory, "secret.env", string(ciphertext))
-				cleanGit(t, directory, "add", "secret.env")
-				cleanGit(t, directory, "commit", "-qm", "ours")
+				runGit(t, directory, "add", "secret.env")
+				runGit(t, directory, "commit", "-qm", "ours")
 			}
 			globalDirectory := t.TempDir()
 			global := "[diff \"age\"]\ntextconv = printf inherited\ncachetextconv = true\n[filter \"age\"]\nclean = printf inherited\nsmudge = printf inherited\nrequired = true\n[merge]\ndefault = age\n[merge \"age\"]\ndriver = printf inherited\n"
 			writeStatusFile(t, globalDirectory, "gitconfig", global)
 			t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
-			if _, err := runInstall(directory, "--no-"+disabled); err != nil {
+			if _, err := runCommand(directory, "install", "--no-"+disabled); err != nil {
 				t.Fatal(err)
 			}
 			var stdout, stderr bytes.Buffer
@@ -391,13 +391,13 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 			if disabled == "diff" {
 				wantAttribute = "unspecified"
 			}
-			if got := cleanGit(t, directory, "check-attr", disabled, "--", "secret.env"); !bytes.Contains(got, []byte(": "+disabled+": "+wantAttribute+"\n")) {
+			if got := runGit(t, directory, "check-attr", disabled, "--", "secret.env"); !bytes.Contains(got, []byte(": "+disabled+": "+wantAttribute+"\n")) {
 				t.Fatalf("disabled driver reactivated: %s", got)
 			}
-			if got := cleanGit(t, directory, "config", "--bool", "--get", "diff.age.cachetextconv"); string(got) != "false\n" {
+			if got := runGit(t, directory, "config", "--bool", "--get", "diff.age.cachetextconv"); string(got) != "false\n" {
 				t.Fatalf("inherited plaintext cache remains enabled: %q", got)
 			}
-			converted := cleanGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env")
+			converted := runGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env")
 			if disabled == "diff" {
 				if !bytes.Equal(converted, ciphertext) {
 					t.Fatalf("disabled textconv ran: %q", converted)
@@ -406,8 +406,8 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 				t.Fatalf("enabled textconv failed: %q", converted)
 			}
 			writeStatusFile(t, directory, "secret.env", plaintext)
-			cleanGit(t, directory, "add", "secret.env")
-			staged := cleanGit(t, directory, "show", ":secret.env")
+			runGit(t, directory, "add", "secret.env")
+			staged := runGit(t, directory, "show", ":secret.env")
 			if disabled == "filter" {
 				if string(staged) != plaintext {
 					t.Fatalf("disabled clean filter ran: %q", staged)
@@ -417,7 +417,7 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 			}
 			if disabled == "merge" {
 				noHooks := t.TempDir()
-				cleanGit(t, directory, "-c", "core.hooksPath="+noHooks, "reset", "--hard", "HEAD")
+				runGit(t, directory, "-c", "core.hooksPath="+noHooks, "reset", "--hard", "HEAD")
 				output, err := exec.Command("git", "-C", directory, "-c", "core.hooksPath="+noHooks, "merge", "--no-edit", "theirs").CombinedOutput()
 				if err == nil || !bytes.Contains(output, []byte("CONFLICT")) || bytes.Contains(output, []byte("inherited")) {
 					t.Fatalf("disabled merge driver ran: %v, %s", err, output)
@@ -444,7 +444,7 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 			case "dry run":
 				args, want = append(args, "-n"), "would install git-age pre-commit hook"
 			case "disable dry run":
-				if _, err := runInstall(directory); err != nil {
+				if _, err := runCommand(directory, "install"); err != nil {
 					t.Fatal(err)
 				}
 				args, want = append(args, "-n", "--no-diff", "--no-merge", "--no-filter"), "would remove git-age post-checkout hook"
@@ -475,10 +475,10 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
 			case "disabled hooks":
-				cleanGit(t, directory, "config", "core.hooksPath", os.DevNull)
+				runGit(t, directory, "config", "core.hooksPath", os.DevNull)
 			}
 			before := installSnapshot(t, directory)
-			output, err := runInstall(directory, args...)
+			output, err := runCommand(directory, "install", args...)
 			if want != "" {
 				if err != nil || !strings.Contains(output, want) {
 					t.Fatalf("dry run: %v, %q", err, output)
@@ -497,24 +497,14 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 			t.Fatalf("args %v: exit %d, output %q", args, code, &stdout)
 		}
 	}
-	if _, err := runInstall(t.TempDir()); err == nil {
+	if _, err := runCommand(t.TempDir(), "install"); err == nil {
 		t.Fatal("install worked outside Git")
 	}
 }
 
-func runInstall(directory string, args ...string) (string, error) {
-	var output bytes.Buffer
-	root := newRootCommand()
-	root.SetOut(&output)
-	root.SetErr(&output)
-	root.SetArgs(append([]string{"-C", directory, "install"}, args...))
-	err := root.Execute()
-	return output.String(), err
-}
-
 func installGitPath(t *testing.T, directory, name string) string {
 	t.Helper()
-	return filepath.FromSlash(strings.TrimSpace(string(cleanGit(t, directory, "rev-parse", "--path-format=absolute", "--git-path", name))))
+	return filepath.FromSlash(strings.TrimSpace(string(runGit(t, directory, "rev-parse", "--path-format=absolute", "--git-path", name))))
 }
 
 func installSnapshot(t *testing.T, directory string) map[string]string {

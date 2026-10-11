@@ -5,10 +5,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -28,9 +26,8 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 	if root == "" {
 		return result, fmt.Errorf("pre-push requires a Git worktree")
 	}
-	git := func(args ...string) ([]byte, error) {
-		command := exec.Command("git", append([]string{"-C", root}, args...)...)
-		output, err := command.Output()
+	historyGit := func(args ...string) ([]byte, error) {
+		output, err := git(root, args...)
 		if err != nil {
 			return nil, fmt.Errorf("read push history: git %s: %w", args[0], err)
 		}
@@ -46,16 +43,16 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 		if strings.Trim(fields[1], "0") == "" {
 			continue // Deleting a ref publishes no commits.
 		}
-		commit, err := git("rev-parse", "--verify", "--quiet", fields[1]+"^{commit}")
+		commit, err := historyGit("rev-parse", "--verify", "--quiet", fields[1]+"^{commit}")
 		if err != nil {
-			if _, existsErr := git("cat-file", "-e", fields[1]); existsErr != nil {
+			if _, existsErr := historyGit("cat-file", "-e", fields[1]); existsErr != nil {
 				return result, err
 			}
 			continue // A tag of a blob or tree contains no commit history.
 		}
 		tips = append(tips, strings.TrimSpace(string(commit)))
 		if strings.Trim(fields[3], "0") != "" {
-			if commit, err := git("rev-parse", "--verify", "--quiet", fields[3]+"^{commit}"); err == nil {
+			if commit, err := historyGit("rev-parse", "--verify", "--quiet", fields[3]+"^{commit}"); err == nil {
 				known = append(known, strings.TrimSpace(string(commit)))
 			}
 		}
@@ -66,7 +63,7 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 	if len(tips) == 0 {
 		return result, nil
 	}
-	tracking, err := git("for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/")
+	tracking, err := historyGit("for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes/")
 	if err != nil {
 		return result, err
 	}
@@ -83,34 +80,26 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 	for _, oid := range known {
 		revisions.WriteString("^" + oid + "\n")
 	}
-	command := exec.Command("git", "-C", root, "rev-list", "--topo-order", "--reverse", "--stdin")
-	command.Stdin = &revisions
-	commits, err := command.Output()
+	commits, err := gitWithInput(root, revisions.Bytes(), "rev-list", "--topo-order", "--reverse", "--stdin")
 	if err != nil {
 		return result, fmt.Errorf("list outgoing commits: %w", err)
 	}
 	if len(commits) == 0 {
 		return result, nil
 	}
-	currentRules := map[string][]byte{}
 	paths, err := regularFiles(root, true)
 	if err != nil {
 		return result, err
 	}
-	for _, path := range paths {
-		if filepath.Base(path) == ".gitage" {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return result, err
-			}
-			currentRules[path] = content
-		}
+	currentRules, err := readRules(paths)
+	if err != nil {
+		return result, err
 	}
 	type version struct{ path, oid string }
 	introduced := map[version]bool{} // Value records whether any applicable rules protect the version.
 	hasRules := len(currentRules) != 0
 	for _, commit := range strings.Fields(string(commits)) {
-		changes, err := git("diff-tree", "--root", "-m", "-r", "--raw", "--no-commit-id", "--no-abbrev", "--no-renames", "--diff-filter=ACMRT", "-z", commit, "--")
+		changes, err := historyGit("diff-tree", "--root", "-m", "-r", "--raw", "--no-commit-id", "--no-abbrev", "--no-renames", "--diff-filter=ACMRT", "-z", commit, "--")
 		if err != nil {
 			return result, err
 		}
@@ -122,17 +111,17 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 			if len(fields) != 5 {
 				return result, fmt.Errorf("invalid Git history diff record")
 			}
-			if fields[1] != "100644" && fields[1] != "100755" {
+			if !regularMode(fields[1]) {
 				continue
 			}
 			path := string(records[i+1])
 			versions = append(versions, version{path, fields[3]})
-			candidates = append(candidates, filepath.Join(root, filepath.FromSlash(path)))
+			candidates = append(candidates, nativePath(root, path))
 		}
 		if len(versions) == 0 {
 			continue
 		}
-		tree, err := git("ls-tree", "-r", "-z", "--full-tree", commit)
+		tree, err := historyGit("ls-tree", "-r", "-z", "--full-tree", commit)
 		if err != nil {
 			return result, err
 		}
@@ -143,14 +132,14 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 				continue
 			}
 			fields := strings.Fields(header)
-			if len(fields) != 3 || fields[0] != "100644" && fields[0] != "100755" {
+			if len(fields) != 3 || !regularMode(fields[0]) {
 				continue
 			}
-			content, err := git("cat-file", "blob", fields[2])
+			content, err := historyGit("cat-file", "blob", fields[2])
 			if err != nil {
 				return result, err
 			}
-			ownRules[filepath.Join(root, filepath.FromSlash(path))] = content
+			ownRules[nativePath(root, path)] = content
 		}
 		hasRules = hasRules || len(ownRules) != 0
 		protected := map[string]bool{}
@@ -176,11 +165,11 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 	for version, protected := range introduced {
 		state, exists := states[version.oid]
 		if !exists {
-			content, err := git("cat-file", "blob", version.oid)
+			content, err := historyGit("cat-file", "blob", version.oid)
 			if err != nil {
 				return result, err
 			}
-			state = blobState{len(content) == 0, contentState(content) == "LOCKED", bytes.Contains(content, []byte("AGE-SECRET-KEY-"))}
+			state = blobState{len(content) == 0, contentState(content) == Locked, bytes.Contains(content, []byte("AGE-SECRET-KEY-"))}
 			states[version.oid] = state
 		}
 		if filepath.Base(version.path) == ".gitage.key" || hasRules && !state.locked && state.privateKey {
@@ -196,8 +185,8 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 	for path := range plaintext {
 		result.Plaintext = append(result.Plaintext, path)
 	}
-	sort.Strings(result.PrivateKeys)
-	sort.Strings(result.Plaintext)
+	slices.Sort(result.PrivateKeys)
+	slices.Sort(result.Plaintext)
 	return result, nil
 }
 
