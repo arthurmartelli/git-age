@@ -293,7 +293,7 @@ cp "$tmp/gitage.good" .gitage
 
 refuse "unlock without any identity" "no identity configured" git -c age.keyFile= age unlock
 age -r "$alice" -o "$tmp/keys/protected.age" "$tmp/keys/alice"
-refuse "a passphrase-protected identity" "encrypted (passphrase-protected) age identity" \
+refuse "an encrypted age identity" "encrypted age identity" \
   git-age unlock -i "$tmp/keys/protected.age"
 unlock
 drop_carol

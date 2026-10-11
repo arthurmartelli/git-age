@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-func TestWipeEditCopy(t *testing.T) {
+func TestWipePlaintextCopy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "secret.env")
 	secret := bytes.Repeat([]byte("secret"), 10000)
 	if err := os.WriteFile(path, secret, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := wipeEditCopy(path); err != nil {
+	if err := wipePlaintextCopy(path); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(path)

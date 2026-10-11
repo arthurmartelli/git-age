@@ -49,33 +49,11 @@ func Clean(directory, path string, content []byte) ([]byte, error) {
 }
 
 func cleanProtectedContent(directory, root, path string, content []byte, conflicted bool) ([]byte, error) {
-	// Git attributes may over-match. Only rules above this path determine
-	// protection, and unrelated malformed rule files must not block the filter.
-	rules := map[string][]byte{}
-	for parent := filepath.Dir(path); inside(root, parent); parent = filepath.Dir(parent) {
-		rule := filepath.Join(parent, ".gitage")
-		info, err := os.Lstat(rule)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		if err == nil && info.Mode().IsRegular() {
-			rules[rule], err = os.ReadFile(rule)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if parent == root {
-			break
-		}
-	}
-	if len(rules) == 0 {
-		return content, nil
-	}
-	files, err := matchProtectedFiles(root, root, []string{path}, rules, ruleIgnoreCase(root, true))
+	protected, err := protectedPath(root, path)
 	if err != nil {
 		return nil, err
 	}
-	if len(files) == 0 {
+	if !protected {
 		return content, nil
 	}
 	identities, _, base, external, err := encryptionKeys(directory, root, nil, nil)
@@ -104,6 +82,36 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 		return encryptContent(content, recipients)
 	}
 	return content, nil
+}
+
+func protectedPath(root, path string) (bool, error) {
+	// Git attributes may over-match. Only rules above this path determine
+	// protection, and unrelated malformed rule files must not block this path.
+	rules := map[string][]byte{}
+	for parent := filepath.Dir(path); inside(root, parent); parent = filepath.Dir(parent) {
+		rule := filepath.Join(parent, ".gitage")
+		info, err := os.Lstat(rule)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		if err == nil && info.Mode().IsRegular() {
+			rules[rule], err = os.ReadFile(rule)
+			if err != nil {
+				return false, err
+			}
+		}
+		if parent == root {
+			break
+		}
+	}
+	if len(rules) == 0 {
+		return false, nil
+	}
+	files, err := matchProtectedFiles(root, root, []string{path}, rules, ruleIgnoreCase(root, true))
+	if err != nil {
+		return false, err
+	}
+	return len(files) != 0, nil
 }
 
 func conflictedCiphertext(root, path string) bool {

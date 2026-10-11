@@ -192,10 +192,15 @@ func TestLockUnlockRoundTrip(t *testing.T) {
 
 func encryptUnlockFixture(t *testing.T, identity *age.X25519Identity, plaintext string, armored bool) []byte {
 	t.Helper()
+	return encryptRecipientFixture(t, identity.Recipient(), plaintext, armored)
+}
+
+func encryptRecipientFixture(t *testing.T, recipient age.Recipient, plaintext string, armored bool) []byte {
+	t.Helper()
 	var output bytes.Buffer
 	if armored {
 		outer := armor.NewWriter(&output)
-		writer, err := age.Encrypt(outer, identity.Recipient())
+		writer, err := age.Encrypt(outer, recipient)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,7 +214,7 @@ func encryptUnlockFixture(t *testing.T, identity *age.X25519Identity, plaintext 
 			t.Fatal(err)
 		}
 	} else {
-		writer, err := age.Encrypt(&output, identity.Recipient())
+		writer, err := age.Encrypt(&output, recipient)
 		if err != nil {
 			t.Fatal(err)
 		}

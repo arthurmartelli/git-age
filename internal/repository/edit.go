@@ -26,7 +26,7 @@ func editPlaintext(path string, plaintext []byte, edit func(string) error) (cont
 	}
 	copyPath := filepath.Join(directory, filepath.Base(path))
 	defer func() {
-		wipeErr := wipeEditCopy(copyPath)
+		wipeErr := wipePlaintextCopy(copyPath)
 		err = errors.Join(err, wipeErr, os.RemoveAll(directory))
 	}()
 	if err := os.WriteFile(copyPath, plaintext, 0600); err != nil {
@@ -45,7 +45,7 @@ func editPlaintext(path string, plaintext []byte, edit func(string) error) (cont
 	return os.ReadFile(copyPath)
 }
 
-func wipeEditCopy(path string) error {
+func wipePlaintextCopy(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -54,11 +54,11 @@ func wipeEditCopy(path string) error {
 		return err
 	}
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("cannot overwrite editor copy: %s", path)
+		return fmt.Errorf("cannot overwrite plaintext copy: %s", path)
 	}
 	// ponytail: one overwrite cannot erase snapshots, SSD remnants or editor backups.
 	if err := writeExisting(path, make([]byte, info.Size())); err != nil {
-		return fmt.Errorf("overwrite editor copy: %w", err)
+		return fmt.Errorf("overwrite plaintext copy: %w", err)
 	}
 	return nil
 }

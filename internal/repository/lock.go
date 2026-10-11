@@ -13,39 +13,44 @@ import (
 	"filippo.io/age/agessh"
 )
 
-func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse bool) error {
-	_, err := encryptFiles(directory, files, explicitRecipients, identityPaths, noReuse, false, nil)
-	return err
+type encryptionResult struct {
+	skipped, noAccess []ProtectedFile
+}
+
+func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse bool) ([]ProtectedFile, error) {
+	result, err := encryptFiles(directory, files, explicitRecipients, identityPaths, noReuse, false, nil)
+	return result.noAccess, err
 }
 
 func Rekey(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string) ([]ProtectedFile, error) {
-	return encryptFiles(directory, files, explicitRecipients, identityPaths, true, true, nil)
+	result, err := encryptFiles(directory, files, explicitRecipients, identityPaths, true, true, nil)
+	return result.skipped, err
 }
 
-func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool, edit func(string) error) ([]ProtectedFile, error) {
+func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool, edit func(string) error) (encryptionResult, error) {
 	var pending []ProtectedFile
 	for _, file := range files {
 		if file.State == "UNKNOWN" {
-			return nil, fmt.Errorf("cannot determine file state: %s", file.Path)
+			return encryptionResult{}, fmt.Errorf("cannot determine file state: %s", file.Path)
 		}
 		if rekey || edit != nil || file.State != "LOCKED" {
 			pending = append(pending, file)
 		}
 	}
 	if len(pending) == 0 {
-		return nil, nil
+		return encryptionResult{}, nil
 	}
 	directory, err := filepath.Abs(directory)
 	if err != nil {
-		return nil, err
+		return encryptionResult{}, err
 	}
 	directory, err = filepath.EvalSymlinks(directory)
 	if err != nil {
-		return nil, err
+		return encryptionResult{}, err
 	}
 	root, err := gitRoot(directory)
 	if err != nil {
-		return nil, err
+		return encryptionResult{}, err
 	}
 	inGit := root != ""
 	if !inGit {
@@ -53,34 +58,34 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 	}
 	if inGit {
 		if err := checkRecipientTrust(directory); err != nil {
-			return nil, err
+			return encryptionResult{}, err
 		}
 	}
 	identities, own, base, external, err := encryptionKeys(directory, root, explicitRecipients, identityPaths)
 	if err != nil {
-		return nil, err
+		return encryptionResult{}, err
 	}
 
 	var replacements []replacement
-	var skipped []ProtectedFile
+	var skipped, noAccess []ProtectedFile
 	for _, file := range pending {
 		path := filepath.Join(directory, filepath.FromSlash(file.Path))
 		values, ruleFiles, err := fileRecipients(root, path, base)
 		if err != nil {
-			return nil, err
+			return encryptionResult{}, err
 		}
 		recipients, err := parseRecipients(values)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", file.Path, err)
+			return encryptionResult{}, fmt.Errorf("%s: %w", file.Path, err)
 		}
 		original, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return encryptionResult{}, err
 		}
 		plaintext := original
 		if (rekey || edit != nil) && file.State == "LOCKED" {
 			if len(identities) == 0 {
-				return nil, fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
+				return encryptionResult{}, fmt.Errorf("no identity configured; use -i or generate a key with git-age keygen")
 			}
 			plaintext, err = decryptContent(original, identities)
 			if err != nil {
@@ -90,14 +95,14 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 					skipped = append(skipped, file)
 					continue
 				}
-				return nil, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
+				return encryptionResult{}, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 			}
 		}
 		if edit != nil {
 			before := plaintext
 			plaintext, err = editPlaintext(file.Path, plaintext, edit)
 			if err != nil {
-				return nil, fmt.Errorf("%w; %s was not changed", err, file.Path)
+				return encryptionResult{}, fmt.Errorf("%w; %s was not changed", err, file.Path)
 			}
 			if bytes.Equal(before, plaintext) {
 				continue
@@ -110,15 +115,18 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 		if encrypted == nil {
 			encrypted, err = encryptContent(plaintext, recipients)
 			if err != nil {
-				return nil, err
+				return encryptionResult{}, err
 			}
 		}
 		replacements = append(replacements, replacement{path, original, encrypted})
+		if len(own) != 0 && !containsRecipient(values, own) {
+			noAccess = append(noAccess, file)
+		}
 	}
 	if len(replacements) == 0 && len(skipped) != 0 {
-		return nil, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
+		return encryptionResult{}, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
 	}
-	return skipped, replaceFiles(replacements)
+	return encryptionResult{skipped, noAccess}, replaceFiles(replacements)
 }
 
 func checkRecipientTrust(directory string) error {
@@ -133,6 +141,10 @@ func checkRecipientTrust(directory string) error {
 }
 
 func encryptionKeys(directory, root string, explicitRecipients, identityPaths []string) (identities []age.Identity, own, base []string, external bool, err error) {
+	return encryptionKeysFromRules(directory, root, explicitRecipients, identityPaths, nil)
+}
+
+func encryptionKeysFromRules(directory, root string, explicitRecipients, identityPaths []string, rules map[string][]byte) (identities []age.Identity, own, base []string, external bool, err error) {
 	identities, own, err = loadIdentities(directory, root, identityPaths)
 	if err != nil {
 		return
@@ -143,7 +155,7 @@ func encryptionKeys(directory, root string, explicitRecipients, identityPaths []
 	}
 	external = len(base) != 0
 	if len(base) == 0 {
-		base, err = ruleRecipients(filepath.Join(root, ".gitage"))
+		base, err = recipientsFromRules(filepath.Join(root, ".gitage"), rules)
 		if err != nil {
 			return
 		}
@@ -159,19 +171,23 @@ func encryptionKeys(directory, root string, explicitRecipients, identityPaths []
 		base = own
 	}
 	if len(base) == 0 {
-		err = fmt.Errorf("no recipients configured; use -r, [recipients], or an age identity")
+		err = fmt.Errorf("no encryption key configured; use -r, [recipients], or an age identity")
 	}
 	return
 }
 
 func fileRecipients(root, path string, base []string) ([]string, []string, error) {
+	return fileRecipientsFromRules(root, path, base, nil)
+}
+
+func fileRecipientsFromRules(root, path string, base []string, ruleContents map[string][]byte) ([]string, []string, error) {
 	values := append([]string(nil), base...)
 	var rules []string
 	for parent := filepath.Dir(path); inside(root, parent); parent = filepath.Dir(parent) {
 		rule := filepath.Join(parent, ".gitage")
 		rules = append(rules, rule)
 		if parent != root {
-			extra, err := ruleRecipients(rule)
+			extra, err := recipientsFromRules(rule, ruleContents)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -182,6 +198,14 @@ func fileRecipients(root, path string, base []string) ([]string, []string, error
 		}
 	}
 	return values, rules, nil
+}
+
+func recipientsFromRules(path string, rules map[string][]byte) ([]string, error) {
+	if rules == nil {
+		return ruleRecipients(path)
+	}
+	_, recipients, err := parseRules(path, rules[path])
+	return recipients, err
 }
 
 func encryptContent(plaintext []byte, recipients []age.Recipient) ([]byte, error) {

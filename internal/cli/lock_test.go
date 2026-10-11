@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -119,6 +120,53 @@ func TestLockInvalidRecipientsChangeNothing(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLockIgnoresSymlinkedRules(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	t.Setenv("GIT_AGE_KEY_FILE", "")
+	t.Setenv("GIT_AGE_RECIPIENT", "")
+	identity, linkedRecipient := rekeyIdentity(t), rekeyIdentity(t)
+	external := t.TempDir()
+	writeStatusFile(t, external, "identity.key", identity.String()+"\n")
+	writeStatusFile(t, external, "linked.gitage", "[files]\npublic.env\n[recipients]\n"+linkedRecipient.Recipient().String()+"\n")
+	if err := os.Symlink(filepath.Join(external, "linked.gitage"), filepath.Join(directory, ".gitage")); err != nil {
+		t.Skipf("file symlinks unavailable: %v", err)
+	}
+	writeStatusFile(t, directory, "sub/.gitage", "[files]\nx.env\n")
+	writeStatusFile(t, directory, "sub/x.env", "secret\n")
+	writeStatusFile(t, directory, "public.env", "public\n")
+	cleanGit(t, directory, "config", "age.keyFile", filepath.Join(external, "identity.key"))
+	// Reproduce `git -c age.keyFile= age lock`, clearing the configured key.
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "age.keyFile")
+	t.Setenv("GIT_CONFIG_VALUE_0", "")
+	before := installSnapshot(t, directory)
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"-C", directory, "lock"}, &stdout, &stderr)
+	if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "no encryption key configured") {
+		t.Fatalf("missing key: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
+	}
+	if !reflect.DeepEqual(before, installSnapshot(t, directory)) {
+		t.Fatal("failed lock changed files")
+	}
+	// An explicit identity encrypts the nested file to itself, without granting
+	// access to the recipient or matching the pattern in the symlinked rules.
+	if _, err := runLock(directory, "-i", filepath.Join(external, "identity.key")); err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := os.ReadFile(filepath.Join(directory, "sub/x.env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCleanDecrypts(t, ciphertext, identity, []byte("secret\n"))
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), linkedRecipient); err == nil {
+		t.Fatal("used a recipient from symlinked rules")
+	}
+	if content, err := os.ReadFile(filepath.Join(directory, "public.env")); err != nil || string(content) != "public\n" {
+		t.Fatal("used a pattern from symlinked rules")
 	}
 }
 

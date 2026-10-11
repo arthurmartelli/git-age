@@ -26,7 +26,16 @@ func newLockCommand(options *globalOptions) *cobra.Command {
 				}
 			}
 			if !options.dryRun {
-				if err := repository.Lock(options.directory, files, recipients, identities, noReuse); err != nil {
+				noAccess, err := repository.Lock(options.directory, files, recipients, identities, noReuse)
+				if err != nil {
+					return err
+				}
+				for _, file := range noAccess {
+					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: your identity is not among the recipients for %s; the configured identities cannot unlock this file\n", quoteStatusPath(file.Path)); err != nil {
+						return err
+					}
+				}
+				if err := refreshGitAttributes(cmd, options.directory); err != nil {
 					return err
 				}
 			}

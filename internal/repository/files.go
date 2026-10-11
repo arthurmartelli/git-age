@@ -23,6 +23,8 @@ type ProtectedFile struct {
 	Pattern  string
 }
 
+var ErrNoRules = errors.New("no .gitage files found")
+
 func ProtectedFiles(directory string, paths []string) ([]ProtectedFile, error) {
 	directory, err := filepath.Abs(directory)
 	if err != nil {
@@ -67,7 +69,7 @@ func ProtectedFiles(directory string, paths []string) ([]ProtectedFile, error) {
 		}
 	}
 	if len(rules) == 0 {
-		return nil, fmt.Errorf("no .gitage files found under %s", root)
+		return nil, fmt.Errorf("%w under %s", ErrNoRules, root)
 	}
 	ruleContents := make(map[string][]byte, len(rules))
 	for _, path := range rules {
@@ -103,7 +105,9 @@ func matchProtectedFiles(directory, root string, candidates []string, rules map[
 		return nil, err
 	}
 	defer os.RemoveAll(scratch)
-	if output, err := exec.Command("git", "-C", scratch, "-c", "init.templateDir=", "init", "-q").CombinedOutput(); err != nil {
+	init := exec.Command("git", "-C", scratch, "-c", "init.templateDir=", "init", "-q")
+	init.Env = ruleMatcherEnvironment()
+	if output, err := init.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("initialize rule matcher: %w: %s", err, output)
 	}
 	for path, content := range rules {
@@ -137,6 +141,7 @@ func matchProtectedFiles(directory, root string, candidates []string, rules map[
 		input.WriteByte(0)
 	}
 	cmd := exec.Command("git", "-C", scratch, "-c", "core.excludesFile="+os.DevNull, "-c", "core.ignoreCase="+ignoreCase, "check-ignore", "--no-index", "--stdin", "-z", "-v")
+	cmd.Env = ruleMatcherEnvironment()
 	cmd.Stdin = &input
 	output, err := cmd.Output()
 	var exit *exec.ExitError
@@ -160,6 +165,25 @@ func matchProtectedFiles(directory, root string, candidates []string, rules map[
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
+}
+
+func ruleMatcherEnvironment() []string {
+	// Hooks export repository paths. The scratch matcher must use its own Git
+	// directory and index, including during partial commits and in worktrees.
+	local := map[string]bool{
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true,
+		"GIT_INDEX_FILE": true, "GIT_OBJECT_DIRECTORY": true,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_PREFIX": true,
+		"GIT_SHALLOW_FILE": true, "GIT_GRAFT_FILE": true,
+	}
+	var environment []string
+	for _, value := range os.Environ() {
+		key, _, _ := strings.Cut(value, "=")
+		if !local[key] {
+			environment = append(environment, value)
+		}
+	}
+	return environment
 }
 
 func regularFiles(directory string, inGit bool) ([]string, error) {
@@ -225,7 +249,7 @@ func parseRules(path string, content []byte) ([]byte, []string, error) {
 			lines[i] = ""
 			continue
 		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+		if ruleSectionHeader(line) {
 			section = line[1 : len(line)-1]
 			if section != "files" && section != "recipients" {
 				return nil, nil, fmt.Errorf("%s:%d: unknown section [%s]", path, i+1, section)
@@ -242,9 +266,15 @@ func parseRules(path string, content []byte) ([]byte, []string, error) {
 			if line == "!" {
 				return nil, nil, fmt.Errorf("%s:%d: empty negation rule", path, i+1)
 			}
+			pattern := trimPatternSpaces(strings.TrimSuffix(raw, "\r"))
+			pattern = strings.TrimPrefix(pattern, "!")
+			pattern = strings.TrimSuffix(pattern, "/")
+			if err := validatePattern(pattern); err != nil {
+				return nil, nil, fmt.Errorf("%s:%d: %w", path, i+1, err)
+			}
 		case "recipients":
 			if !strings.HasPrefix(line, "age1") && !strings.HasPrefix(line, "ssh-") {
-				return nil, nil, fmt.Errorf("%s:%d: not an age recipient or SSH public key", path, i+1)
+				return nil, nil, fmt.Errorf("%s:%d: is not an age recipient or SSH public key", path, i+1)
 			}
 			recipients = append(recipients, line)
 			lines[i] = ""
@@ -256,6 +286,77 @@ func parseRules(path string, content []byte) ([]byte, []string, error) {
 		return nil, nil, fmt.Errorf("%s: [recipients] section is empty", path)
 	}
 	return []byte(strings.Join(lines, "\n")), recipients, nil
+}
+
+func ruleSectionHeader(line string) bool {
+	if len(line) < 3 || line[0] != '[' || line[len(line)-1] != ']' || line[1] < 'a' || line[1] > 'z' {
+		return false
+	}
+	for _, c := range line[2 : len(line)-1] {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func trimPatternSpaces(pattern string) string {
+	for strings.HasSuffix(pattern, " ") {
+		backslashes := 0
+		for i := len(pattern) - 2; i >= 0 && pattern[i] == '\\'; i-- {
+			backslashes++
+		}
+		if backslashes%2 != 0 {
+			break
+		}
+		pattern = strings.TrimSuffix(pattern, " ")
+	}
+	return pattern
+}
+
+func validatePattern(pattern string) error {
+	for i := 0; i < len(pattern); i++ {
+		switch pattern[i] {
+		case '\\':
+			i++
+			if i == len(pattern) {
+				return fmt.Errorf("pattern ends with an unescaped backslash")
+			}
+		case '[':
+			i++
+			if i < len(pattern) && (pattern[i] == '!' || pattern[i] == '^') {
+				i++
+			}
+			// A closing bracket as the first member is a literal bracket.
+			if i < len(pattern) && pattern[i] == ']' {
+				i++
+			}
+			for ; i < len(pattern) && pattern[i] != ']'; i++ {
+				if pattern[i] == '\\' {
+					i++
+				} else if pattern[i] == '[' && i+1 < len(pattern) && pattern[i+1] == ':' {
+					close := strings.IndexByte(pattern[i+2:], ']')
+					if close == -1 {
+						return fmt.Errorf("pattern has an unterminated [")
+					}
+					close += i + 2
+					if close > i+2 && pattern[close-1] == ':' {
+						name := pattern[i+2 : close-1]
+						switch name {
+						case "alnum", "alpha", "blank", "cntrl", "digit", "graph", "lower", "print", "punct", "space", "upper", "xdigit":
+						default:
+							return fmt.Errorf("unknown character class [:%s:]", name)
+						}
+						i = close
+					}
+				}
+			}
+			if i >= len(pattern) {
+				return fmt.Errorf("pattern has an unterminated [")
+			}
+		}
+	}
+	return nil
 }
 
 func fileState(path string) string {

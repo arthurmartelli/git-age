@@ -65,10 +65,20 @@ func loadIdentities(directory, root string, paths []string) ([]age.Identity, []s
 		if err != nil {
 			return nil, nil, err
 		}
+		if contentState(content) == "LOCKED" || bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
+			return nil, nil, fmt.Errorf("%s: encrypted age identity files are not supported; use an unencrypted identity file", path)
+		}
+		if bytes.HasPrefix(content, []byte("-----BEGIN ENCRYPTED PRIVATE KEY-----")) {
+			return nil, nil, fmt.Errorf("%s: passphrase-protected private keys are not supported; use an unencrypted identity file", path)
+		}
 		var parsed []age.Identity
 		if bytes.HasPrefix(content, []byte("-----BEGIN")) {
 			identity, err := agessh.ParseIdentity(content)
 			if err != nil {
+				var protected *ssh.PassphraseMissingError
+				if errors.As(err, &protected) {
+					return nil, nil, fmt.Errorf("%s: passphrase-protected SSH identities are not supported; use an unencrypted identity file", path)
+				}
 				return nil, nil, fmt.Errorf("%s: %w", path, err)
 			}
 			parsed = []age.Identity{identity}

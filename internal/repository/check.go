@@ -13,9 +13,24 @@ type IndexCheck struct {
 	Files        []ProtectedFile
 	RemovedRules []string
 	PrivateKeys  []string
+	StaleFiles   []string
+	HasRules     bool
+	root         string
+	index        []byte
+	blobs        map[string]string
+	modes        map[string]string
+	rules        map[string][]byte
 }
 
 func CheckIndex(directory string) (IndexCheck, error) {
+	return checkIndex(directory, true)
+}
+
+func CheckCommit(directory string) (IndexCheck, error) {
+	return checkIndex(directory, false)
+}
+
+func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 	var result IndexCheck
 	// Use the Git root because staged paths are repository-relative.
 	root, err := gitRoot(directory)
@@ -25,6 +40,7 @@ func CheckIndex(directory string) (IndexCheck, error) {
 	if root == "" {
 		return result, fmt.Errorf("check --cached requires a Git repository")
 	}
+	result.root = root
 	git := func(args ...string) ([]byte, error) {
 		output, err := exec.Command("git", append([]string{"-C", root}, args...)...).Output()
 		if err != nil {
@@ -37,6 +53,8 @@ func CheckIndex(directory string) (IndexCheck, error) {
 		return result, err
 	}
 	blobs := map[string]string{}
+	modes := map[string]string{}
+	result.index, result.blobs, result.modes = output, blobs, modes
 	for _, record := range bytes.Split(output, []byte{0}) {
 		if len(record) == 0 {
 			continue
@@ -51,6 +69,7 @@ func CheckIndex(directory string) (IndexCheck, error) {
 		}
 		if fields[0] == "100644" || fields[0] == "100755" {
 			blobs[path] = fields[1]
+			modes[path] = fields[0]
 		}
 	}
 
@@ -70,6 +89,7 @@ func CheckIndex(directory string) (IndexCheck, error) {
 	sort.Strings(result.RemovedRules)
 
 	rules := map[string][]byte{}
+	result.rules = rules
 	for path, oid := range blobs {
 		if filepath.Base(path) != ".gitage" {
 			continue
@@ -80,7 +100,8 @@ func CheckIndex(directory string) (IndexCheck, error) {
 		}
 		rules[filepath.Join(root, filepath.FromSlash(path))] = content
 	}
-	if len(rules) == 0 {
+	result.HasRules = len(rules) != 0
+	if !result.HasRules && requireRules {
 		return result, fmt.Errorf("no .gitage files staged")
 	}
 	output, err = git("diff", "--cached", "--name-only", "--no-renames", "-z", "--diff-filter=ACMRT")
@@ -112,10 +133,13 @@ func CheckIndex(directory string) (IndexCheck, error) {
 		file.State = contentState(changed[file.Path])
 	}
 	for path, content := range changed {
-		if filepath.Base(path) == ".gitage.key" || (!protected[path] && bytes.Contains(content, []byte("AGE-SECRET-KEY-"))) {
+		if filepath.Base(path) == ".gitage.key" || (result.HasRules && !protected[path] && bytes.Contains(content, []byte("AGE-SECRET-KEY-"))) {
 			result.PrivateKeys = append(result.PrivateKeys, path)
 		}
 	}
 	sort.Strings(result.PrivateKeys)
-	return result, nil
+	if !requireRules {
+		result.StaleFiles, err = stagedStaleFiles(root, blobs, rules)
+	}
+	return result, err
 }

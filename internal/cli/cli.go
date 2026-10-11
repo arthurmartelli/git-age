@@ -24,7 +24,7 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	root.SetArgs(args)
 
 	if err := root.Execute(); err != nil {
-		if errors.Is(err, errCheckFailed) {
+		if errors.Is(err, errCheckFailed) || errors.Is(err, errMergeConflict) {
 			return 1
 		}
 		if errors.Is(err, ErrNotImplemented) {
@@ -67,15 +67,15 @@ func newRootCommand() *cobra.Command {
 		newEditCommand(&options),
 		newStatusCommand(&options),
 		newCheckCommand(&options),
-		newInstallCommand(),
+		newInstallCommand(&options),
 		newUninstallCommand(),
 		newTrustCommand(),
 		newAuditCommand(),
 		newCompletionCommand(),
 		newTextconvCommand(&options),
 		newCleanCommand(&options),
-		newMergeCommand(),
-		newHookCommand(),
+		newMergeCommand(&options),
+		newHookCommand(&options),
 	)
 
 	return root
