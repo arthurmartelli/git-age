@@ -126,7 +126,7 @@ func Install(directory string, options InstallOptions, stdout io.Writer) error {
 		if value == "" {
 			description = "unset repo git config " + key
 		}
-		steps = append(steps, installStep{description, func() error { return setInstallConfig(root, key, value) }})
+		steps = append(steps, installStep{description, func() error { return setLocalConfig(root, key, value) }})
 	}
 	if options.Mode != "" {
 		if err := ValidateHookMode(options.Mode); err != nil {
@@ -239,7 +239,7 @@ func gitPath(root, name string) (string, error) {
 	return absolutePath(root, filepath.FromSlash(strings.TrimSuffix(strings.TrimSuffix(string(output), "\n"), "\r"))), nil
 }
 
-func setInstallConfig(root, key, value string) error {
+func setLocalConfig(root, key, value string) error {
 	args := []string{"-C", root, "config", "--local"}
 	if value == "" {
 		args = append(args, "--unset-all", key)

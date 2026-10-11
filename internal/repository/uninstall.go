@@ -84,7 +84,7 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 		key = strings.ToLower(key)
 		if configured[key] {
 			steps = append(steps, installStep{"unset repo git config " + key, func() error {
-				return setInstallConfig(root, key, "")
+				return setLocalConfig(root, key, "")
 			}})
 		}
 	}

@@ -65,13 +65,22 @@ func newStatusCommand(options *globalOptions) *cobra.Command {
 			if !porcelain && options.verbose {
 				fmt.Fprintf(&output, "encrypting to: %s\n", target)
 			}
-			if _, err := fmt.Fprint(cmd.OutOrStdout(), output.String()); err != nil || porcelain || len(stale) == 0 {
+			if _, err := fmt.Fprint(cmd.OutOrStdout(), output.String()); err != nil || porcelain {
 				return err
 			}
 			var warning strings.Builder
-			warning.WriteString("\ngit-age: these files are still encrypted to a previous [recipients] list (run `git-age rekey`):\n")
-			for _, path := range stale {
-				fmt.Fprintf(&warning, "  %s\n", quoteStatusPath(path))
+			if len(stale) != 0 {
+				warning.WriteString("\ngit-age: these files are still encrypted to a previous [recipients] list (run `git-age rekey`):\n")
+				for _, path := range stale {
+					fmt.Fprintf(&warning, "  %s\n", quoteStatusPath(path))
+				}
+			}
+			untrusted, err := repository.RecipientsUntrusted(options.directory)
+			if err != nil {
+				return err
+			}
+			if untrusted {
+				warning.WriteString("git-age: the [recipients] lists differ from the ones you trusted; `git-age lock` shows how\n")
 			}
 			_, err = fmt.Fprint(cmd.ErrOrStderr(), warning.String())
 			return err

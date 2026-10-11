@@ -69,7 +69,7 @@ func newRootCommand() *cobra.Command {
 		newCheckCommand(&options),
 		newInstallCommand(&options),
 		newUninstallCommand(&options),
-		newTrustCommand(),
+		newTrustCommand(&options),
 		newAuditCommand(),
 		newCompletionCommand(),
 		newTextconvCommand(&options),

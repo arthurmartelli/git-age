@@ -21,7 +21,7 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 	if root == "" {
 		return result, fmt.Errorf("a checked Git index is required")
 	}
-	if err := checkRecipientTrust(root); err != nil {
+	if err := checkRecipientTrust(root, check.rules); err != nil {
 		return result, err
 	}
 	keys, err := loadKeys(root, root, nil, nil, check.rules)

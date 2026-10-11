@@ -69,7 +69,7 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 			return false, fmt.Errorf("not protected by .gitage, but encrypted")
 		}
 		if inGit {
-			if err := checkRecipientTrust(directory); err != nil {
+			if err := checkRecipientTrust(root, nil); err != nil {
 				return false, err
 			}
 		}

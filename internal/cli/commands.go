@@ -2,23 +2,6 @@ package cli
 
 import "github.com/spf13/cobra"
 
-func newTrustCommand() *cobra.Command {
-	var options struct {
-		Show bool
-	}
-
-	trust := &cobra.Command{
-		Use:   "trust",
-		Short: "pin the current [recipients] lists as trusted",
-		Args:  cobra.NoArgs,
-		RunE:  notImplemented,
-	}
-
-	trust.Flags().BoolVar(&options.Show, "show", false, "print the hash of the current lists, pin nothing")
-
-	return trust
-}
-
 func newAuditCommand() *cobra.Command {
 	var options struct {
 		Recipients        []string

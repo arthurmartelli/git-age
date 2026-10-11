@@ -51,7 +51,7 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 		return nil, err
 	}
 	if conflicted {
-		if err := checkRecipientTrust(directory); err != nil {
+		if err := checkRecipientTrust(root, nil); err != nil {
 			return nil, err
 		}
 		return keys.encrypt(root, path, target, content, true)

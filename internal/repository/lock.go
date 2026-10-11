@@ -46,7 +46,7 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 		return nil, nil, err
 	}
 	if inGit {
-		if err := checkRecipientTrust(directory); err != nil {
+		if err := checkRecipientTrust(root, nil); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -109,17 +109,6 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 		return nil, nil, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
 	}
 	return skipped, noAccess, replaceFiles(replacements)
-}
-
-func checkRecipientTrust(directory string) error {
-	trusted, err := configValues(directory, "age.trustedRecipients")
-	if err != nil {
-		return err
-	}
-	if len(trusted) != 0 {
-		return fmt.Errorf("recipient trust verification is not implemented; refusing to encrypt with age.trustedRecipients configured")
-	}
-	return nil
 }
 
 // keys holds the identities and base recipients for encrypting files.
