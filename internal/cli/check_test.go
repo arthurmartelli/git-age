@@ -9,8 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"filippo.io/age"
 )
 
 func TestCheck(t *testing.T) {
@@ -18,32 +16,29 @@ func TestCheck(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-			writeStatusFile(t, directory, "a.env", "secret")
-			writeStatusFile(t, directory, "z.env", "secret")
-			writeStatusFile(t, directory, "notes.txt", "not protected")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, "a.env", "secret")
+			writeFile(t, directory, "z.env", "secret")
+			writeFile(t, directory, "notes.txt", "not protected")
 			code, diagnostic := 1, "protected files are currently unlocked:\n\n  a.env\n  z.env\n"
 			var args []string
 			switch scenario {
 			case "locked", "armored":
-				identity, err := age.GenerateX25519Identity()
-				if err != nil {
-					t.Fatal(err)
-				}
-				content := encryptUnlockFixture(t, identity, "secret", scenario == "armored")
-				writeStatusFile(t, directory, "a.env", string(content))
-				writeStatusFile(t, directory, "z.env", string(content))
+				identity := newIdentity(t)
+				content := encryptFixture(t, identity.Recipient(), "secret", scenario == "armored")
+				writeFile(t, directory, "a.env", string(content))
+				writeFile(t, directory, "z.env", string(content))
 				code, diagnostic = 0, ""
 			case "no matches":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.secret\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.secret\n")
 				code, diagnostic = 0, ""
 			case "outside Git":
 				directory = t.TempDir()
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-				writeStatusFile(t, directory, "a.env", "secret")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+				writeFile(t, directory, "a.env", "secret")
 				diagnostic = "protected files are currently unlocked:\n\n  a.env\n"
 			case "subdirectory":
-				writeStatusFile(t, directory, "sub/b.env", "secret")
+				writeFile(t, directory, "sub/b.env", "secret")
 				directory = filepath.Join(directory, "sub")
 				diagnostic = "protected files are currently unlocked:\n\n  b.env\n"
 			case "dry run":
@@ -54,7 +49,7 @@ func TestCheck(t *testing.T) {
 				}
 				code, diagnostic = 2, "no .gitage files found"
 			case "invalid rules":
-				writeStatusFile(t, directory, ".gitage", "[unknown]\n")
+				writeFile(t, directory, ".gitage", "[unknown]\n")
 				code, diagnostic = 2, "unknown section"
 			}
 			got, output, stderr := runCheck(directory, args...)
@@ -77,8 +72,8 @@ func TestCheckUnknown(t *testing.T) {
 	}
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "unreadable.env", "secret")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "unreadable.env", "secret")
 	path := filepath.Join(directory, "unreadable.env")
 	if err := os.Chmod(path, 0); err != nil {
 		t.Fatal(err)
@@ -97,44 +92,41 @@ func TestCheckCached(t *testing.T) {
 			initKeygenRepo(t, directory)
 			t.Setenv("GIT_AGE_ALLOW_PRIVATE_KEYS", "")
 			t.Setenv("GIT_AGE_ALLOW_REMOVE", "")
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-			writeStatusFile(t, directory, "secret.env", "secret")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, "secret.env", "secret")
 			runGit(t, directory, "add", ".gitage", "secret.env")
 			code, diagnostic := 1, "protected files are staged as plaintext"
 			switch scenario {
 			case "staged plaintext", "staged encrypted":
-				identity, err := age.GenerateX25519Identity()
-				if err != nil {
-					t.Fatal(err)
-				}
-				writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "secret", false)))
+				identity := newIdentity(t)
+				writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "secret", false)))
 				if scenario == "staged encrypted" {
 					runGit(t, directory, "add", "secret.env")
-					writeStatusFile(t, directory, "secret.env", "secret")
+					writeFile(t, directory, "secret.env", "secret")
 					code, diagnostic = 0, ""
 				}
 			case "staged rules":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.txt\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.txt\n")
 			case "unstaged rules":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.txt\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.txt\n")
 				runGit(t, directory, "add", ".gitage")
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 				code, diagnostic = 0, ""
 			case "nested negation":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.txt\n")
-				writeStatusFile(t, directory, "sub/.gitage", "[files]\n!public.txt\n*.env\n")
-				writeStatusFile(t, directory, "sub/public.txt", "public")
+				writeFile(t, directory, ".gitage", "[files]\n*.txt\n")
+				writeFile(t, directory, "sub/.gitage", "[files]\n!public.txt\n*.env\n")
+				writeFile(t, directory, "sub/public.txt", "public")
 				runGit(t, directory, "add", ".gitage", "sub")
 				code, diagnostic = 0, ""
 			case "unchanged plaintext":
 				runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline")
-				writeStatusFile(t, directory, "notes.txt", "new")
+				writeFile(t, directory, "notes.txt", "new")
 				runGit(t, directory, "add", "notes.txt")
 				code, diagnostic = 0, ""
 			case "ignored tracked file":
-				writeStatusFile(t, directory, ".gitignore", "secret.env\n")
+				writeFile(t, directory, ".gitignore", "secret.env\n")
 			case "private key", "local key", "protected key", "allow private key":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.protected\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.protected\n")
 				path, content := "private.txt", "AGE-SECRET-KEY-1TEST"
 				if scenario == "local key" {
 					path, content = ".gitage.key", "not even a key"
@@ -144,7 +136,7 @@ func TestCheckCached(t *testing.T) {
 				} else {
 					diagnostic = "refusing to commit private age keys"
 				}
-				writeStatusFile(t, directory, path, content)
+				writeFile(t, directory, path, content)
 				runGit(t, directory, "add", "-f", ".gitage", path)
 				if scenario == "allow private key" {
 					t.Setenv("GIT_AGE_ALLOW_PRIVATE_KEYS", "yes")
@@ -152,7 +144,7 @@ func TestCheckCached(t *testing.T) {
 				}
 			case "case insensitive":
 				runGit(t, directory, "config", "core.ignoreCase", "true")
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.ENV\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.ENV\n")
 				runGit(t, directory, "add", ".gitage")
 			case "subdirectory":
 				if err := os.Mkdir(filepath.Join(directory, "sub"), 0700); err != nil {
@@ -188,8 +180,8 @@ func TestCheckCachedRemovedRules(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
 			t.Setenv("GIT_AGE_ALLOW_REMOVE", "")
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-			writeStatusFile(t, directory, "sub/.gitage", "[files]\n*.env\n")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, "sub/.gitage", "[files]\n*.env\n")
 			runGit(t, directory, "add", ".")
 			runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "rules")
 			if scenario == "symlink" {
@@ -222,6 +214,26 @@ func TestCheckCachedRemovedRules(t *testing.T) {
 	}
 }
 
+func TestCommandsRequireWorktree(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		args    []string
+		want    string
+	}{
+		{"install", nil, "install"},
+		{"uninstall", nil, "uninstall"},
+		{"check", []string{"--cached"}, "check --cached"},
+		{"hook", []string{"pre-push", "origin", "url"}, "pre-push"},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			output, err := runCommand(t.TempDir(), test.command, test.args...)
+			if err == nil || err.Error() != test.want+" requires a Git worktree" || output != "" {
+				t.Fatalf("outside Git: output %q, error %v", output, err)
+			}
+		})
+	}
+}
+
 func TestCheckCachedErrors(t *testing.T) {
 	for _, scenario := range []string{"outside Git", "no staged rules", "malformed staged rules", "unmerged", "unexpected argument"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -229,9 +241,9 @@ func TestCheckCachedErrors(t *testing.T) {
 			var args []string
 			if scenario != "outside Git" {
 				initKeygenRepo(t, directory)
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 				if scenario == "malformed staged rules" {
-					writeStatusFile(t, directory, ".gitage", "[typo]\n")
+					writeFile(t, directory, ".gitage", "[typo]\n")
 				}
 				if scenario != "no staged rules" {
 					runGit(t, directory, "add", ".gitage")
@@ -259,8 +271,8 @@ func TestCheckCachedErrors(t *testing.T) {
 func TestCheckReadOnly(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "secret.env", "secret")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "secret.env", "secret")
 	runGit(t, directory, "add", ".")
 	snapshot := func() map[string]string {
 		files := map[string]string{}

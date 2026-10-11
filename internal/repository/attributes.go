@@ -19,7 +19,7 @@ func RefreshAttributes(directory string) error {
 	if err != nil {
 		return err
 	}
-	existing, mode, _, err := readInstallFile(path)
+	existing, mode, err := readInstallFile(path)
 	if err != nil {
 		return err
 	}

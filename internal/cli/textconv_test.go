@@ -10,24 +10,16 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"filippo.io/age"
 )
 
 func TestTextconv(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
 	t.Setenv("GIT_AGE_KEY_FILE", "")
-	identity, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	other, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-	corrupt := encryptUnlockFixture(t, identity, "secret", false)
+	identity := newIdentity(t)
+	other := newIdentity(t)
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	corrupt := encryptFixture(t, identity.Recipient(), "secret", false)
 	corrupt[len(corrupt)-1] ^= 1
 
 	for _, test := range []struct {
@@ -37,15 +29,15 @@ func TestTextconv(t *testing.T) {
 	}{
 		{"plaintext", []byte("plain\r\ntext"), "plain\r\ntext"},
 		{"empty", nil, ""},
-		{"encrypted", encryptUnlockFixture(t, identity, "secret\n", false), "secret\n"},
-		{"armored", encryptUnlockFixture(t, identity, "secret\n", true), "secret\n"},
+		{"encrypted", encryptFixture(t, identity.Recipient(), "secret\n", false), "secret\n"},
+		{"armored", encryptFixture(t, identity.Recipient(), "secret\n", true), "secret\n"},
 		{"binary", []byte("binary\x00data"), binaryPlaceholder([]byte("binary\x00data"))},
-		{"encrypted binary", encryptUnlockFixture(t, identity, "binary\x00data", false), binaryPlaceholder([]byte("binary\x00data"))},
-		{"wrong key", encryptUnlockFixture(t, other, "secret", false), "cannot decrypt with configured identities"},
+		{"encrypted binary", encryptFixture(t, identity.Recipient(), "binary\x00data", false), binaryPlaceholder([]byte("binary\x00data"))},
+		{"wrong key", encryptFixture(t, other.Recipient(), "secret", false), "cannot decrypt with configured identities"},
 		{"corrupt", corrupt, "cannot decrypt with configured identities"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			writeStatusFile(t, directory, "blob", string(test.content))
+			writeFile(t, directory, "blob", string(test.content))
 			var output, stderr bytes.Buffer
 			code := Run([]string{"-C", directory, "textconv", "blob"}, &output, &stderr)
 			want := test.want
@@ -66,9 +58,9 @@ func TestTextconv(t *testing.T) {
 		t.Run(key+" identity", func(t *testing.T) {
 			t.Setenv("GIT_AGE_KEY_FILE", filepath.Join(directory, key))
 			if key == "invalid" {
-				writeStatusFile(t, directory, key, "invalid key\n")
+				writeFile(t, directory, key, "invalid key\n")
 			}
-			writeStatusFile(t, directory, "blob", string(corrupt))
+			writeFile(t, directory, "blob", string(corrupt))
 			var output, stderr bytes.Buffer
 			if code := Run([]string{"-C", directory, "textconv", "blob"}, &output, &stderr); code != 0 || !strings.HasPrefix(output.String(), "[git-age: encrypted, ") || stderr.Len() != 0 {
 				t.Fatalf("exit %d, output %q, stderr %q", code, &output, &stderr)
@@ -78,9 +70,10 @@ func TestTextconv(t *testing.T) {
 	t.Run("no identity", func(t *testing.T) {
 		directory := t.TempDir()
 		initKeygenRepo(t, directory)
-		writeStatusFile(t, directory, "blob", string(corrupt))
+		writeFile(t, directory, "blob", string(corrupt))
 		var output, stderr bytes.Buffer
-		if code := Run([]string{"-C", directory, "textconv", "blob"}, &output, &stderr); code != 0 || !strings.Contains(output.String(), "encrypted, no identity configured; sha256 ") {
+		want := fmt.Sprintf("[git-age: encrypted, no identity configured; sha256 %x]\n", sha256.Sum256(corrupt))
+		if code := Run([]string{"-C", directory, "textconv", "blob"}, &output, &stderr); code != 0 || output.String() != want || stderr.Len() != 0 {
 			t.Fatalf("exit %d, output %q, stderr %q", code, &output, &stderr)
 		}
 	})
@@ -100,13 +93,10 @@ func TestTextconvGitDiff(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
 	t.Setenv("GIT_AGE_KEY_FILE", "")
-	identity, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-	writeStatusFile(t, directory, ".gitattributes", "secret.env diff=age\n")
-	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "TOKEN=before\n", false)))
+	identity := newIdentity(t)
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	writeFile(t, directory, ".gitattributes", "secret.env diff=age\n")
+	writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "TOKEN=before\n", false)))
 
 	name := "git-age"
 	if runtime.GOOS == "windows" {
@@ -128,7 +118,7 @@ func TestTextconvGitDiff(t *testing.T) {
 	}
 	git("config", "diff.age.textconv", "\""+filepath.ToSlash(executable)+"\" textconv")
 	git("add", ".gitattributes", "secret.env")
-	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "TOKEN=after\n", true)))
+	writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "TOKEN=after\n", true)))
 	output := git("diff", "--no-ext-diff", "--", "secret.env")
 	if !strings.Contains(output, "-TOKEN=before\n+TOKEN=after\n") || strings.Contains(output, "AGE ENCRYPTED") {
 		t.Fatalf("unexpected diff:\n%s", output)

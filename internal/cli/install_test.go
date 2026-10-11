@@ -18,8 +18,8 @@ func TestInstall(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-			writeStatusFile(t, directory, "sub/.keep", "")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, "sub/.keep", "")
 			workingDirectory := directory
 			if scenario == "linked worktree" {
 				runGit(t, directory, "config", "user.name", "Test")
@@ -89,10 +89,10 @@ func TestInstall(t *testing.T) {
 func TestInstallAttributes(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n/root.secret\nsecrets/\n/a/b.key\nsecret file\n\\!literal\n\\#literal\nspace\\ \ncontrol\x01name\n!public.env\n")
-	writeStatusFile(t, directory, "nested [x]/.gitage", "[files]\n*.key\n/only.here\nrelative/path\n")
-	writeStatusFile(t, directory, "ignored/.gitage", "[unknown]\n")
-	writeStatusFile(t, directory, ".gitignore", "ignored/\n")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n/root.secret\nsecrets/\n/a/b.key\nsecret file\n\\!literal\n\\#literal\nspace\\ \ncontrol\x01name\n!public.env\n")
+	writeFile(t, directory, "nested [x]/.gitage", "[files]\n*.key\n/only.here\nrelative/path\n")
+	writeFile(t, directory, "ignored/.gitage", "[unknown]\n")
+	writeFile(t, directory, ".gitignore", "ignored/\n")
 	if _, err := runCommand(directory, "install"); err != nil {
 		t.Fatal(err)
 	}
@@ -148,12 +148,12 @@ func TestInstallGitIntegration(t *testing.T) {
 	directory, identity, _ := cleanFixture(t, []byte("A=1\nB=1\nC=1\n"), false)
 	runGit(t, directory, "branch", "ours")
 	runGit(t, directory, "checkout", "-qb", "theirs")
-	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "A=1\nB=1\nC=2\n", false)))
+	writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "A=1\nB=1\nC=2\n", false)))
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "-qm", "theirs")
 	runGit(t, directory, "checkout", "-q", "ours")
-	ours := encryptUnlockFixture(t, identity, "A=2\nB=1\nC=1\n", false)
-	writeStatusFile(t, directory, "secret.env", string(ours))
+	ours := encryptFixture(t, identity.Recipient(), "A=2\nB=1\nC=1\n", false)
+	writeFile(t, directory, "secret.env", string(ours))
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "-qm", "ours")
 	runGit(t, directory, "config", "diff.age.cachetextconv", "true")
@@ -164,7 +164,7 @@ func TestInstallGitIntegration(t *testing.T) {
 	if text := runGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env"); string(text) != "A=2\nB=1\nC=1\n" {
 		t.Fatalf("installed diff driver: %q", text)
 	}
-	writeStatusFile(t, directory, "secret.env", "A=2\nB=1\nC=1\n")
+	writeFile(t, directory, "secret.env", "A=2\nB=1\nC=1\n")
 	oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD:secret.env")))
 	runGit(t, directory, "update-index", "--cacheinfo", "100644,"+oid+",secret.env")
 	if status := runGit(t, directory, "status", "--porcelain", "--", "secret.env"); len(status) != 0 {
@@ -174,12 +174,12 @@ func TestInstallGitIntegration(t *testing.T) {
 	if staged := runGit(t, directory, "show", ":secret.env"); !bytes.Equal(staged, ours) {
 		t.Fatal("installed filter did not reuse ciphertext")
 	}
-	writeStatusFile(t, directory, "secret.env", string(ours))
+	writeFile(t, directory, "secret.env", string(ours))
 	runGit(t, directory, "add", "secret.env")
 	// Hook policy handlers are a separate porting task; exercise the installed
 	// merge driver with hooks disabled for this Git operation only.
 	runGit(t, directory, "-c", "core.hooksPath="+t.TempDir(), "merge", "--no-edit", "theirs")
-	assertCleanDecrypts(t, runGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("A=2\nB=1\nC=2\n"))
+	assertDecrypts(t, runGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("A=2\nB=1\nC=2\n"))
 	if _, err := runCommand(directory, "install", "--no-diff", "--no-filter", "--no-merge"); err != nil {
 		t.Fatal(err)
 	}
@@ -195,12 +195,12 @@ func TestInstallHookEntrypoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	writeStatusFile(t, bin, "git-age", "#!/bin/sh\nprintf '%s\\n' \"$@\"\ncat\n")
+	writeFile(t, bin, "git-age", "#!/bin/sh\nprintf '%s\\n' \"$@\"\ncat\n")
 	if err := os.Chmod(filepath.Join(bin, "git-age"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	writeStatusFile(t, directory, ".hook-input", "input\n")
+	writeFile(t, directory, ".hook-input", "input\n")
 	for _, test := range []struct {
 		event, want string
 		args        []string
@@ -222,13 +222,13 @@ func TestInstallHookEntrypoints(t *testing.T) {
 func TestInstallUpdateAndDisable(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 	runGit(t, directory, "config", "age.hookMode", "abort")
 	runGit(t, directory, "config", "age.unlockAfterCommit", "true")
 	runGit(t, directory, "config", "age.keyFile", "keep.key")
 	runGit(t, directory, "config", "age.recipient", "age1keep")
 	attributes := installGitPath(t, directory, "info/attributes")
-	writeStatusFile(t, filepath.Dir(attributes), "attributes", "# user prefix\r\n*.txt diff=custom\r\n")
+	writeFile(t, filepath.Dir(attributes), "attributes", "# user prefix\r\n*.txt diff=custom\r\n")
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(attributes, 0600); err != nil {
 			t.Fatal(err)
@@ -252,7 +252,7 @@ func TestInstallUpdateAndDisable(t *testing.T) {
 	if err := errors.Join(writeErr, file.Close()); err != nil {
 		t.Fatal(err)
 	}
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.secret\n")
+	writeFile(t, directory, ".gitage", "[files]\n*.secret\n")
 	if _, err := runCommand(directory, "install", "--no-unlock-after-commit"); err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestInstallUpdateAndDisable(t *testing.T) {
 		runGit(t, directory, "config", "--local", "--get", key)
 	}
 	hooks := installGitPath(t, directory, "hooks")
-	writeStatusFile(t, hooks, "post-checkout", "#!/bin/sh\n# other tool\n")
+	writeFile(t, hooks, "post-checkout", "#!/bin/sh\n# other tool\n")
 	if _, err := runCommand(directory, "install", "--no-diff", "--no-merge", "--no-filter"); err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +319,7 @@ func TestInstallDriverFlags(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			if _, err := runCommand(directory, "install"); err != nil {
 				t.Fatal(err)
 			}
@@ -366,19 +366,19 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 			if disabled == "merge" {
 				runGit(t, directory, "branch", "ours")
 				runGit(t, directory, "checkout", "-qb", "theirs")
-				writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "theirs\n", false)))
+				writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "theirs\n", false)))
 				runGit(t, directory, "add", "secret.env")
 				runGit(t, directory, "commit", "-qm", "theirs")
 				runGit(t, directory, "checkout", "-q", "ours")
 				plaintext = "ours\n"
-				ciphertext = encryptUnlockFixture(t, identity, plaintext, false)
-				writeStatusFile(t, directory, "secret.env", string(ciphertext))
+				ciphertext = encryptFixture(t, identity.Recipient(), plaintext, false)
+				writeFile(t, directory, "secret.env", string(ciphertext))
 				runGit(t, directory, "add", "secret.env")
 				runGit(t, directory, "commit", "-qm", "ours")
 			}
 			globalDirectory := t.TempDir()
 			global := "[diff \"age\"]\ntextconv = printf inherited\ncachetextconv = true\n[filter \"age\"]\nclean = printf inherited\nsmudge = printf inherited\nrequired = true\n[merge]\ndefault = age\n[merge \"age\"]\ndriver = printf inherited\n"
-			writeStatusFile(t, globalDirectory, "gitconfig", global)
+			writeFile(t, globalDirectory, "gitconfig", global)
 			t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
 			if _, err := runCommand(directory, "install", "--no-"+disabled); err != nil {
 				t.Fatal(err)
@@ -405,7 +405,7 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 			} else if string(converted) != plaintext {
 				t.Fatalf("enabled textconv failed: %q", converted)
 			}
-			writeStatusFile(t, directory, "secret.env", plaintext)
+			writeFile(t, directory, "secret.env", plaintext)
 			runGit(t, directory, "add", "secret.env")
 			staged := runGit(t, directory, "show", ":secret.env")
 			if disabled == "filter" {
@@ -432,11 +432,11 @@ func TestInstallDisablesInheritedDrivers(t *testing.T) {
 }
 
 func TestInstallDryRunAndPreflight(t *testing.T) {
-	for _, scenario := range []string{"dry run", "disable dry run", "existing hook", "symlink hook", "directory hook", "malformed rules", "broken attributes", "symlink attributes", "disabled hooks"} {
+	for _, scenario := range []string{"dry run", "disable dry run", "existing hook", "empty hook", "symlink hook", "directory hook", "malformed rules", "broken attributes", "symlink attributes", "disabled hooks"} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			hooks := installGitPath(t, directory, "hooks")
 			attributes := installGitPath(t, directory, "info/attributes")
 			args, want := []string{"--mode", "always-lock"}, ""
@@ -449,9 +449,11 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 				}
 				args, want = append(args, "-n", "--no-diff", "--no-merge", "--no-filter"), "would remove git-age post-checkout hook"
 			case "existing hook":
-				writeStatusFile(t, hooks, "post-rewrite", "#!/bin/sh\n# another tool\n")
+				writeFile(t, hooks, "post-rewrite", "#!/bin/sh\n# another tool\n")
+			case "empty hook":
+				writeFile(t, hooks, "post-rewrite", "")
 			case "symlink hook":
-				writeStatusFile(t, directory, "target", "# git-age managed post-rewrite hook\n")
+				writeFile(t, directory, "target", "# git-age managed post-rewrite hook\n")
 				if err := os.MkdirAll(hooks, 0755); err != nil {
 					t.Fatal(err)
 				}
@@ -463,11 +465,11 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "malformed rules":
-				writeStatusFile(t, directory, "sub/.gitage", "[unknown]\n")
+				writeFile(t, directory, "sub/.gitage", "[unknown]\n")
 			case "broken attributes":
-				writeStatusFile(t, filepath.Dir(attributes), "attributes", "# BEGIN git-age (generated from .gitage; do not edit)\n# user data\n")
+				writeFile(t, filepath.Dir(attributes), "attributes", "# BEGIN git-age (generated from .gitage; do not edit)\n# user data\n")
 			case "symlink attributes":
-				writeStatusFile(t, directory, "target", "# user data\n")
+				writeFile(t, directory, "target", "# user data\n")
 				if err := os.MkdirAll(filepath.Dir(attributes), 0755); err != nil {
 					t.Fatal(err)
 				}

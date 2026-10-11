@@ -8,9 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"filippo.io/age"
-	"filippo.io/age/armor"
 )
 
 func TestUnlock(t *testing.T) {
@@ -19,17 +16,14 @@ func TestUnlock(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
 			t.Setenv("GIT_AGE_KEY_FILE", "")
-			identity, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			key := ".gitage.key"
 			var args []string
 			if source != "local key" {
 				key = "identity.txt"
 			}
-			writeStatusFile(t, directory, key, identity.String()+"\n")
+			writeFile(t, directory, key, identity.String()+"\n")
 			switch source {
 			case "flag":
 				args = []string{"-i", key}
@@ -41,9 +35,9 @@ func TestUnlock(t *testing.T) {
 				}
 			}
 			for _, armored := range []bool{false, true} {
-				content := encryptUnlockFixture(t, identity, "secret\x00bytes\n", armored)
-				writeStatusFile(t, directory, "a.env", string(content))
-				writeStatusFile(t, directory, "sub/b.env", string(content))
+				content := encryptFixture(t, identity.Recipient(), "secret\x00bytes\n", armored)
+				writeFile(t, directory, "a.env", string(content))
+				writeFile(t, directory, "sub/b.env", string(content))
 				if _, err := runCommand(directory, "unlock", append(args, "a.env")...); err != nil {
 					t.Fatal(err)
 				}
@@ -75,31 +69,28 @@ func TestUnlockFailureChangesNothing(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
 			t.Setenv("GIT_AGE_KEY_FILE", "")
-			identity, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
 			if failure != "missing key" {
-				writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
+				writeFile(t, directory, ".gitage.key", identity.String()+"\n")
 			}
-			first := encryptUnlockFixture(t, identity, "first", false)
-			second := encryptUnlockFixture(t, identity, "second", false)
+			first := encryptFixture(t, identity.Recipient(), "first", false)
+			second := encryptFixture(t, identity.Recipient(), "second", false)
 			if failure == "wrong key" {
-				other, err := age.GenerateX25519Identity()
-				if err != nil {
-					t.Fatal(err)
-				}
-				second = encryptUnlockFixture(t, other, "second", false)
+				other := newIdentity(t)
+				second = encryptFixture(t, other.Recipient(), "second", false)
 			}
 			if failure == "corrupt ciphertext" {
 				second[len(second)-1] ^= 1
 			}
-			writeStatusFile(t, directory, "a.env", string(first))
-			writeStatusFile(t, directory, "b.env", string(second))
-			_, err = runCommand(directory, "unlock")
+			writeFile(t, directory, "a.env", string(first))
+			writeFile(t, directory, "b.env", string(second))
+			_, err := runCommand(directory, "unlock")
 			if err == nil {
 				t.Fatal("expected decryption error")
+			}
+			if failure == "missing key" && err.Error() != "no identity configured; use -i or generate a key with git-age keygen" {
+				t.Fatalf("missing identity guidance: %v", err)
 			}
 			if failure != "missing key" && !strings.Contains(err.Error(), "b.env") {
 				t.Errorf("error does not name failing file: %v", err)
@@ -126,8 +117,8 @@ func TestUnlockFailureChangesNothing(t *testing.T) {
 
 func TestUnlockDryRun(t *testing.T) {
 	directory := t.TempDir()
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "a.env", "age-encryption.org/v1\n")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "a.env", "age-encryption.org/v1\n")
 	output, err := runCommand(directory, "unlock", "-n")
 	if err != nil || output != "would unlock: a.env\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
@@ -140,13 +131,10 @@ func TestUnlockDryRun(t *testing.T) {
 func TestUnlockFromSubdirectory(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	identity, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-	writeStatusFile(t, directory, "sub/a.env", string(encryptUnlockFixture(t, identity, "secret", false)))
+	identity := newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	writeFile(t, directory, "sub/a.env", string(encryptFixture(t, identity.Recipient(), "secret", false)))
 	if _, err := runCommand(filepath.Join(directory, "sub"), "unlock", "a.env"); err != nil {
 		t.Fatal(err)
 	}
@@ -157,8 +145,8 @@ func TestUnlockFromSubdirectory(t *testing.T) {
 
 func TestUnlockAlreadyPlaintextNeedsNoKey(t *testing.T) {
 	directory := t.TempDir()
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "a.env", "plaintext")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "a.env", "plaintext")
 	output, err := runCommand(directory, "unlock", "-v", "-i", "missing.key")
 	if err != nil || output != "already unlocked: a.env\n" {
 		t.Fatalf("already unlocked: %q, %v", output, err)
@@ -171,13 +159,10 @@ func TestLockUnlockRoundTrip(t *testing.T) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_AGE_KEY_FILE", "")
 	t.Setenv("GIT_AGE_RECIPIENT", "")
-	identity, err := age.GenerateX25519Identity()
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-	writeStatusFile(t, directory, "a.env", "secret")
+	identity := newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	writeFile(t, directory, "a.env", "secret")
 	if _, err := runCommand(directory, "lock"); err != nil {
 		t.Fatal(err)
 	}
@@ -188,42 +173,4 @@ func TestLockUnlockRoundTrip(t *testing.T) {
 	if err != nil || string(content) != "secret" {
 		t.Fatalf("round trip: %q, %v", content, err)
 	}
-}
-
-func encryptUnlockFixture(t *testing.T, identity *age.X25519Identity, plaintext string, armored bool) []byte {
-	t.Helper()
-	return encryptRecipientFixture(t, identity.Recipient(), plaintext, armored)
-}
-
-func encryptRecipientFixture(t *testing.T, recipient age.Recipient, plaintext string, armored bool) []byte {
-	t.Helper()
-	var output bytes.Buffer
-	if armored {
-		outer := armor.NewWriter(&output)
-		writer, err := age.Encrypt(outer, recipient)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := writer.Write([]byte(plaintext)); err != nil {
-			t.Fatal(err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := outer.Close(); err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		writer, err := age.Encrypt(&output, recipient)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := writer.Write([]byte(plaintext)); err != nil {
-			t.Fatal(err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return output.Bytes()
 }

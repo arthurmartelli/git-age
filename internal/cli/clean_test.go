@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"testing"
 
 	"filippo.io/age"
-	"filippo.io/age/armor"
 )
 
 func TestClean(t *testing.T) {
@@ -43,11 +41,11 @@ func TestClean(t *testing.T) {
 			case "ciphertext":
 				input, passThrough = ciphertext, true
 			case "index preferred":
-				want = encryptUnlockFixture(t, identity, string(plaintext), false)
-				writeStatusFile(t, directory, path, string(want))
+				want = encryptFixture(t, identity.Recipient(), string(plaintext), false)
+				writeFile(t, directory, path, string(want))
 				runGit(t, directory, "add", path)
 			case "HEAD fallback":
-				writeStatusFile(t, directory, path, "staged edit")
+				writeFile(t, directory, path, "staged edit")
 				runGit(t, directory, "add", path)
 			case "missing working file":
 				if err := os.Remove(filepath.Join(directory, path)); err != nil {
@@ -63,18 +61,18 @@ func TestClean(t *testing.T) {
 				}
 				passThrough = true
 			case "wrong identity":
-				writeStatusFile(t, directory, ".gitage.key", rekeyIdentity(t).String()+"\n")
+				writeFile(t, directory, ".gitage.key", newIdentity(t).String()+"\n")
 				passThrough = true
 			case "missing identity", "invalid identity":
 				t.Setenv("GIT_AGE_KEY_FILE", filepath.Join(directory, "other.key"))
 				if scenario == "invalid identity" {
-					writeStatusFile(t, directory, "other.key", "invalid key")
+					writeFile(t, directory, "other.key", "invalid key")
 				}
 				passThrough = true
 			case "corrupt ciphertext":
 				corrupt := bytes.Clone(ciphertext)
 				corrupt[len(corrupt)-1] ^= 1
-				writeStatusFile(t, directory, path, string(corrupt))
+				writeFile(t, directory, path, string(corrupt))
 				runGit(t, directory, "add", path)
 				runGit(t, directory, "commit", "-qm", "corrupt ciphertext")
 				passThrough = true
@@ -90,16 +88,16 @@ func TestClean(t *testing.T) {
 					} else if scenario == "malformed rules" {
 						rules = "[unknown]\n"
 					}
-					writeStatusFile(t, directory, ".gitage", rules)
+					writeFile(t, directory, ".gitage", rules)
 					runGit(t, directory, "add", ".gitage")
 					runGit(t, directory, "commit", "-qm", "change protection")
 				}
 				passThrough = true
 			case "unrelated malformed rules":
-				writeStatusFile(t, directory, "sub/.gitage", "[unknown]\n")
+				writeFile(t, directory, "sub/.gitage", "[unknown]\n")
 			case "recipient edit", "staged recipient edit", "committed recipient edit":
-				extra := rekeyIdentity(t)
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+extra.Recipient().String()+"\n")
+				extra := newIdentity(t)
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+extra.Recipient().String()+"\n")
 				if scenario != "recipient edit" {
 					runGit(t, directory, "add", ".gitage")
 				}
@@ -120,7 +118,7 @@ func TestClean(t *testing.T) {
 			}
 			// The filter must consume stdin, even if the working file differs.
 			if scenario != "missing working file" && !passThrough {
-				writeStatusFile(t, workingDirectory, path, "different working contents")
+				writeFile(t, workingDirectory, path, "different working contents")
 			}
 			output, stderr, err := runClean(workingDirectory, path, input)
 			if err != nil || stderr != "" || !bytes.Equal(output, want) {
@@ -146,9 +144,9 @@ func TestCleanConflict(t *testing.T) {
 			case "theirs encrypted":
 				ours, theirs = theirs, ours
 			case "armored side":
-				ours = encryptUnlockFixture(t, identity, "original", true)
+				ours = encryptFixture(t, identity.Recipient(), "original", true)
 			case "reuse ours", "reuse theirs":
-				reused = encryptUnlockFixture(t, identity, string(input), scenario == "reuse theirs")
+				reused = encryptFixture(t, identity.Recipient(), string(input), scenario == "reuse theirs")
 				ours = reused
 				if scenario == "reuse theirs" {
 					ours, theirs = theirs, reused
@@ -159,32 +157,32 @@ func TestCleanConflict(t *testing.T) {
 					base = []byte("base")
 				}
 			case "unprotected":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n!secret.env\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n!secret.env\n")
 				wantEncrypted = false
 			case "nested recipients":
 				path = "sub/secret.env"
-				extra = rekeyIdentity(t)
-				writeStatusFile(t, directory, "sub/.gitage", "[recipients]\n"+extra.Recipient().String()+"\n")
+				extra = newIdentity(t)
+				writeFile(t, directory, "sub/.gitage", "[recipients]\n"+extra.Recipient().String()+"\n")
 			case "no identity", "no recipients":
 				if err := os.Remove(filepath.Join(directory, ".gitage.key")); err != nil {
 					t.Fatal(err)
 				}
 				if scenario == "no recipients" {
-					writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+					writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 					wantError = true
 				}
 			case "invalid recipients":
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\nage1invalid\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\nage1invalid\n")
 				wantError = true
 			case "malformed rules":
-				writeStatusFile(t, directory, ".gitage", "[unknown]\n")
+				writeFile(t, directory, ".gitage", "[unknown]\n")
 				wantError = true
 			case "trust refusal":
 				runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 				wantError = true
 			}
 			cleanConflictIndex(t, directory, path, base, ours, theirs)
-			writeStatusFile(t, directory, path, string(input))
+			writeFile(t, directory, path, string(input))
 			indexBefore := runGit(t, directory, "ls-files", "--stage", "-z")
 			output, stderr, err := runClean(directory, path, input)
 			if wantError {
@@ -196,12 +194,12 @@ func TestCleanConflict(t *testing.T) {
 					t.Fatalf("clean: %v, %q", err, stderr)
 				}
 				if wantEncrypted {
-					assertCleanDecrypts(t, output, identity, input)
+					assertDecrypts(t, output, identity, input)
 					if reused != nil && !bytes.Equal(output, reused) {
 						t.Fatal("matching conflict side was not reused")
 					}
 					if extra != nil {
-						assertCleanDecrypts(t, output, extra, input)
+						assertDecrypts(t, output, extra, input)
 					}
 				} else if !bytes.Equal(output, input) {
 					t.Fatalf("plaintext changed: %q", output)
@@ -254,13 +252,13 @@ func TestCleanGitFilter(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, output)
 	}
-	writeStatusFile(t, directory, ".gitattributes", "*.env filter=age\n")
+	writeFile(t, directory, ".gitattributes", "*.env filter=age\n")
 	runGit(t, directory, "config", "filter.age.clean", "\""+filepath.ToSlash(executable)+"\" clean %f")
 	runGit(t, directory, "config", "filter.age.smudge", "cat")
 	runGit(t, directory, "config", "filter.age.required", "true")
 	runGit(t, directory, "add", ".gitattributes")
 	runGit(t, directory, "commit", "-qm", "enable filter")
-	writeStatusFile(t, directory, "secret.env", "original\n")
+	writeFile(t, directory, "secret.env", "original\n")
 	// Clear the encrypted file's cached size so Git asks the filter to compare.
 	oid := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD:secret.env")))
 	runGit(t, directory, "update-index", "--cacheinfo", "100644,"+oid+",secret.env")
@@ -271,7 +269,7 @@ func TestCleanGitFilter(t *testing.T) {
 	if output := runGit(t, directory, "show", ":secret.env"); !bytes.Equal(output, ciphertext) {
 		t.Fatal("git add did not reuse ciphertext")
 	}
-	writeStatusFile(t, directory, "secret.env", "changed\n")
+	writeFile(t, directory, "secret.env", "changed\n")
 	if output := runGit(t, directory, "status", "--porcelain", "--", "secret.env"); string(output) != " M secret.env\n" {
 		t.Fatalf("edit not visible: %q", output)
 	}
@@ -281,7 +279,7 @@ func TestCleanGitFilter(t *testing.T) {
 	}
 	for _, refusing := range []bool{true, false} {
 		cleanConflictIndex(t, directory, "secret.env", ciphertext, ciphertext, ciphertext)
-		writeStatusFile(t, directory, "secret.env", "resolved\n")
+		writeFile(t, directory, "secret.env", "resolved\n")
 		if refusing {
 			runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 		} else {
@@ -296,7 +294,7 @@ func TestCleanGitFilter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("stage resolution: %v, %s", err, output)
 			}
-			assertCleanDecrypts(t, runGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))
+			assertDecrypts(t, runGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))
 		}
 	}
 }
@@ -305,12 +303,12 @@ func cleanFixture(t *testing.T, plaintext []byte, armored bool) (string, *age.X2
 	t.Helper()
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	identity := rekeyIdentity(t)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
-	writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-	writeStatusFile(t, directory, "sub/.keep", "")
-	ciphertext := encryptUnlockFixture(t, identity, string(plaintext), armored)
-	writeStatusFile(t, directory, "secret.env", string(ciphertext))
+	identity := newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	writeFile(t, directory, "sub/.keep", "")
+	ciphertext := encryptFixture(t, identity.Recipient(), string(plaintext), armored)
+	writeFile(t, directory, "secret.env", string(ciphertext))
 	runGit(t, directory, "config", "user.name", "Test")
 	runGit(t, directory, "config", "user.email", "test@example.com")
 	runGit(t, directory, "config", "commit.gpgsign", "false")
@@ -348,22 +346,6 @@ func runClean(directory, path string, content []byte) ([]byte, string, error) {
 	root.SetArgs([]string{"-C", directory, "clean", "--", path})
 	err := root.Execute()
 	return output.Bytes(), stderr.String(), err
-}
-
-func assertCleanDecrypts(t *testing.T, ciphertext []byte, identity age.Identity, want []byte) {
-	t.Helper()
-	var input io.Reader = bytes.NewReader(ciphertext)
-	if bytes.HasPrefix(ciphertext, []byte("-----BEGIN")) {
-		input = armor.NewReader(input)
-	}
-	reader, err := age.Decrypt(input, identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plaintext, err := io.ReadAll(reader)
-	if err != nil || !bytes.Equal(plaintext, want) {
-		t.Fatalf("decrypted content: %q, %v; want %q", plaintext, err, want)
-	}
 }
 
 type cleanBrokenReader struct{ err error }

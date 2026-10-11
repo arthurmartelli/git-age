@@ -2,6 +2,7 @@ package repository
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -36,10 +37,10 @@ func textconvDecrypt(directory string, content []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(identities) == 0 {
+	plaintext, err := decryptContent(content, identities)
+	if errors.Is(err, errNoIdentity) {
 		return nil, fmt.Errorf("no identity configured")
 	}
-	plaintext, err := decryptContent(content, identities)
 	if err != nil {
 		return nil, fmt.Errorf("cannot decrypt with configured identities")
 	}

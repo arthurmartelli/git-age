@@ -45,11 +45,11 @@ func gitRoot(directory string) (string, error) {
 	return filepath.EvalSymlinks(root)
 }
 
-// Root returns the worktree root containing directory.
-func Root(directory string) (string, error) {
+// Root returns the worktree root containing directory, or an error naming command.
+func Root(directory, command string) (string, error) {
 	root, err := gitRoot(directory)
 	if err == nil && root == "" {
-		err = fmt.Errorf("not a Git worktree: %s", directory)
+		err = fmt.Errorf("%s requires a Git worktree", command)
 	}
 	return root, err
 }

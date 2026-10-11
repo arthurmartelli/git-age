@@ -20,7 +20,7 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 		Args: func(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("hook: an event is required (see git-age hook --help)")
 		},
-		RunE: notImplemented,
+		RunE: func(cmd *cobra.Command, args []string) error { return nil },
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if !options.dryRun && cmd.Name() != "pre-push" {
 				return refreshGitAttributes(cmd, options.directory)
@@ -42,7 +42,7 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 			if !enabled || options.dryRun {
 				return nil
 			}
-			root, err := repository.Root(options.directory)
+			root, err := repository.Root(options.directory, "post-commit")
 			if err != nil {
 				return err
 			}

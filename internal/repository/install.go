@@ -60,12 +60,9 @@ func installConfigKeys() []string {
 }
 
 func Install(directory string, options InstallOptions, stdout io.Writer) error {
-	root, err := gitRoot(directory)
+	root, err := Root(directory, "install")
 	if err != nil {
 		return err
-	}
-	if root == "" {
-		return fmt.Errorf("install requires a Git worktree")
 	}
 	hooks, err := gitPath(root, "hooks")
 	if err != nil {
@@ -84,7 +81,8 @@ func Install(directory string, options InstallOptions, stdout io.Writer) error {
 	enabled := options.Diff || options.Merge || options.Filter
 	for _, event := range hookEvents {
 		path := filepath.Join(hooks, event)
-		content, _, exists, err := readInstallFile(path)
+		content, _, err := readInstallFile(path)
+		exists := content != nil
 		active := enabled || event != "post-checkout" && event != "post-rewrite"
 		if !active {
 			// Hooks from other tools remain when disabling attribute sync.
@@ -108,7 +106,7 @@ func Install(directory string, options InstallOptions, stdout io.Writer) error {
 		}})
 	}
 	// Prepare the attributes before applying any steps, including config edits.
-	existing, mode, _, err := readInstallFile(attributes)
+	existing, mode, err := readInstallFile(attributes)
 	if err != nil {
 		return err
 	}
@@ -270,19 +268,20 @@ func renderHook(event string) string {
 	return "#!/bin/sh\n# git-age managed " + event + " hook\nexec " + command + "\n"
 }
 
-func readInstallFile(path string) ([]byte, os.FileMode, bool, error) {
+// readInstallFile returns nil content for a missing file.
+func readInstallFile(path string) ([]byte, os.FileMode, error) {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, 0644, false, nil
+		return nil, 0644, nil
 	}
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, 0, true, fmt.Errorf("refusing to replace a non-regular file: %s", path)
+		return nil, 0, fmt.Errorf("refusing to replace a non-regular file: %s", path)
 	}
 	content, err := os.ReadFile(path)
-	return content, info.Mode().Perm(), true, err
+	return content, info.Mode().Perm(), err
 }
 
 func writeInstallFile(path string, content []byte, mode os.FileMode) error {

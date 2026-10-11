@@ -39,14 +39,14 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 		if err != nil {
 			return false, err
 		}
-		if len(identities) == 0 {
-			return false, fmt.Errorf("no identity configured")
-		}
 		for i, content := range contents {
 			if contentState(content) == Locked {
 				contents[i], err = decryptContent(content, identities)
+				if errors.Is(err, errNoIdentity) {
+					return false, err
+				}
 				if err != nil {
-					return false, fmt.Errorf("cannot decrypt %s", []string{"base", "ours", "theirs"}[i])
+					return false, fmt.Errorf("cannot decrypt %s: %w", []string{"base", "ours", "theirs"}[i], err)
 				}
 			}
 		}

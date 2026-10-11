@@ -19,12 +19,12 @@ func TestStatus(t *testing.T) {
 			if inGit {
 				initKeygenRepo(t, directory)
 			}
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n!public.env\n[recipients]\nage1example\n")
-			writeStatusFile(t, directory, "a.env", "plaintext")
-			writeStatusFile(t, directory, "sub/b.env", "age-encryption.org/v1\n")
-			writeStatusFile(t, directory, "sub/c.env", "-----BEGIN AGE ENCRYPTED FILE-----\n")
-			writeStatusFile(t, directory, "public.env", "public")
-			writeStatusFile(t, directory, "readme", "public")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n!public.env\n[recipients]\nage1example\n")
+			writeFile(t, directory, "a.env", "plaintext")
+			writeFile(t, directory, "sub/b.env", "age-encryption.org/v1\n")
+			writeFile(t, directory, "sub/c.env", "-----BEGIN AGE ENCRYPTED FILE-----\n")
+			writeFile(t, directory, "public.env", "public")
+			writeFile(t, directory, "readme", "public")
 			for _, tc := range []struct {
 				name      string
 				directory string
@@ -60,11 +60,11 @@ func TestStatus(t *testing.T) {
 func TestStatusRules(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n**/*.env\nsecrets/\n!secrets/public.txt\n")
-	writeStatusFile(t, directory, "sub/.gitage", "[files]\n!public.env\n*.txt\n")
-	writeStatusFile(t, directory, ".gitignore", "ignored.env\n")
+	writeFile(t, directory, ".gitage", "[files]\n**/*.env\nsecrets/\n!secrets/public.txt\n")
+	writeFile(t, directory, "sub/.gitage", "[files]\n!public.env\n*.txt\n")
+	writeFile(t, directory, ".gitignore", "ignored.env\n")
 	for _, name := range []string{"a.env", "ignored.env", "sub/public.env", "sub/private.txt", "secrets/public.txt", "secrets/.gitage.key"} {
-		writeStatusFile(t, directory, name, "plaintext")
+		writeFile(t, directory, name, "plaintext")
 	}
 	got, err := runCommand(directory, "status", "--porcelain")
 	if err != nil {
@@ -80,8 +80,8 @@ func TestStatusErrors(t *testing.T) {
 	if _, err := runCommand(directory, "status"); err == nil || !strings.Contains(err.Error(), "no .gitage files") {
 		t.Fatalf("missing rules: %v", err)
 	}
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "readme", "hello")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "readme", "hello")
 	for _, tc := range []struct{ path, message string }{
 		{"missing.env", "no such file or directory"},
 		{"readme", "not protected by .gitage"},
@@ -93,7 +93,7 @@ func TestStatusErrors(t *testing.T) {
 			t.Errorf("%s: %v", tc.path, err)
 		}
 	}
-	writeStatusFile(t, directory, ".gitage", "[file]\n*.env\n")
+	writeFile(t, directory, ".gitage", "[file]\n*.env\n")
 	if _, err := runCommand(directory, "status"); err == nil || !strings.Contains(err.Error(), "unknown section") {
 		t.Fatalf("invalid rules: %v", err)
 	}
@@ -104,8 +104,8 @@ func TestStatusQuotedPaths(t *testing.T) {
 		t.Skip("Windows filenames cannot contain tabs")
 	}
 	directory := t.TempDir()
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "a\tb.env", "plaintext")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "a\tb.env", "plaintext")
 	got, err := runCommand(directory, "status", "--porcelain")
 	if err != nil || got != "U. \"a\\tb.env\"\n" {
 		t.Fatalf("quoted: %q, %v", got, err)
@@ -119,8 +119,8 @@ func TestStatusQuotedPaths(t *testing.T) {
 func TestStatusReadOnly(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "a.env", "plaintext")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "a.env", "plaintext")
 	snapshot := func() map[string]string {
 		result := map[string]string{}
 		err := filepath.WalkDir(directory, func(path string, entry os.DirEntry, err error) error {
@@ -158,16 +158,5 @@ func TestStatusReadOnly(t *testing.T) {
 		if after[path] != content {
 			t.Errorf("status changed %s", path)
 		}
-	}
-}
-
-func writeStatusFile(t *testing.T, directory, name, content string) {
-	t.Helper()
-	path := filepath.Join(directory, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
-		t.Fatal(err)
 	}
 }

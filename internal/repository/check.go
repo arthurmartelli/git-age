@@ -32,12 +32,9 @@ func CheckCommit(directory string) (IndexCheck, error) {
 func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 	var result IndexCheck
 	// Use the Git root because staged paths are repository-relative.
-	root, err := gitRoot(directory)
+	root, err := Root(directory, "check --cached")
 	if err != nil {
 		return result, err
-	}
-	if root == "" {
-		return result, fmt.Errorf("check --cached requires a Git repository")
 	}
 	result.root = root
 	indexGit := func(args ...string) ([]byte, error) {

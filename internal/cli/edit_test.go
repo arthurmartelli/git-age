@@ -19,21 +19,21 @@ func TestEdit(t *testing.T) {
 			initKeygenRepo(t, directory)
 			t.Setenv("GIT_AGE_KEY_FILE", "")
 			t.Setenv("GIT_AGE_RECIPIENT", "")
-			identity := rekeyIdentity(t)
-			writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			name := "sub/a ' $ file.env"
-			before := encryptUnlockFixture(t, identity, "secret\r\nwithout final newline", false)
+			before := encryptFixture(t, identity.Recipient(), "secret\r\nwithout final newline", false)
 			if action == "unlocked" {
 				before = []byte("plaintext")
 			}
 			if action == "wrong key" {
-				before = encryptUnlockFixture(t, rekeyIdentity(t), "secret", false)
+				before = encryptFixture(t, newIdentity(t).Recipient(), "secret", false)
 			}
 			if action == "corrupt ciphertext" {
 				before[len(before)-1] ^= 1
 			}
-			writeStatusFile(t, directory, name, string(before))
+			writeFile(t, directory, name, string(before))
 			source := filepath.Join(directory, filepath.FromSlash(name))
 			scratch := t.TempDir()
 			for _, variable := range []string{"TMPDIR", "TMP", "TEMP"} {
@@ -50,7 +50,7 @@ func TestEdit(t *testing.T) {
 			var args []string
 			recipient := identity
 			if action == "recipient override" {
-				recipient = rekeyIdentity(t)
+				recipient = newIdentity(t)
 				args = []string{"-r", recipient.Recipient().String()}
 			}
 			if action == "identity flag" {
@@ -64,7 +64,7 @@ func TestEdit(t *testing.T) {
 			}
 			if action == "unprotected" {
 				name = "public.txt"
-				writeStatusFile(t, directory, name, "public")
+				writeFile(t, directory, name, "public")
 			}
 			if action == "directory" {
 				name = "sub"
@@ -84,10 +84,10 @@ func TestEdit(t *testing.T) {
 			if (err != nil) != wantError {
 				t.Fatalf("edit: %v, output: %s", err, &output)
 			}
-			after := readRekeyFile(t, directory, "sub/a ' $ file.env")
+			after := readFile(t, directory, "sub/a ' $ file.env")
 			switch action {
 			case "change", "replace", "recipient override", "identity flag", "subdirectory":
-				assertRekeyPlaintext(t, after, recipient, "edited\n")
+				assertDecrypts(t, after, recipient, []byte("edited\n"))
 				if action == "recipient override" {
 					if _, err := age.Decrypt(bytes.NewReader(after), identity); err == nil {
 						t.Fatal("old recipient can still decrypt")

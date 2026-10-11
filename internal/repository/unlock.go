@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -31,9 +32,6 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 	if err != nil {
 		return err
 	}
-	if len(identities) == 0 {
-		return errNoIdentity
-	}
 
 	// Authenticate all ciphertexts first so a bad file cannot leave a partial unlock.
 	var replacements []replacement
@@ -44,6 +42,9 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 			return err
 		}
 		plaintext, err := decryptContent(original, identities)
+		if errors.Is(err, errNoIdentity) {
+			return err
+		}
 		if err != nil {
 			return fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 		}
@@ -53,6 +54,9 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 }
 
 func decryptContent(content []byte, identities []age.Identity) ([]byte, error) {
+	if len(identities) == 0 {
+		return nil, errNoIdentity
+	}
 	var input io.Reader = bytes.NewReader(content)
 	if bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
 		input = armor.NewReader(input)

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,10 +20,7 @@ func TestLock(t *testing.T) {
 			initKeygenRepo(t, directory)
 			t.Setenv("GIT_AGE_RECIPIENT", "")
 			t.Setenv("GIT_AGE_KEY_FILE", "")
-			identity, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
+			identity := newIdentity(t)
 			recipient := identity.Recipient().String()
 			rules := "[files]\n*.env\n"
 			var args []string
@@ -40,27 +36,17 @@ func TestLock(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "own key":
-				writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
+				writeFile(t, directory, ".gitage.key", identity.String()+"\n")
 			}
-			writeStatusFile(t, directory, ".gitage", rules)
-			writeStatusFile(t, directory, "a.env", "secret\x00bytes\n")
-			writeStatusFile(t, directory, "b.env", "untouched")
+			writeFile(t, directory, ".gitage", rules)
+			writeFile(t, directory, "a.env", "secret\x00bytes\n")
+			writeFile(t, directory, "b.env", "untouched")
 			args = append(args, "a.env")
 			if _, err := runCommand(directory, "lock", args...); err != nil {
 				t.Fatal(err)
 			}
-			ciphertext, err := os.ReadFile(filepath.Join(directory, "a.env"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			reader, err := age.Decrypt(bytes.NewReader(ciphertext), identity)
-			if err != nil {
-				t.Fatal(err)
-			}
-			plaintext, err := io.ReadAll(reader)
-			if err != nil || string(plaintext) != "secret\x00bytes\n" {
-				t.Fatalf("plaintext: %q, %v", plaintext, err)
-			}
+			ciphertext := readFile(t, directory, "a.env")
+			assertDecrypts(t, ciphertext, identity, []byte("secret\x00bytes\n"))
 			if content, _ := os.ReadFile(filepath.Join(directory, "b.env")); string(content) != "untouched" {
 				t.Fatal("unselected file changed")
 			}
@@ -79,8 +65,8 @@ func TestLock(t *testing.T) {
 
 func TestLockDryRun(t *testing.T) {
 	directory := t.TempDir()
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeStatusFile(t, directory, "a.env", "secret")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, "a.env", "secret")
 	output, err := runCommand(directory, "lock", "-n")
 	if err != nil || output != "would lock: a.env\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
@@ -100,16 +86,13 @@ func TestLockInvalidRecipientsChangeNothing(t *testing.T) {
 			t.Setenv("GIT_AGE_KEY_FILE", "")
 			rules := "[files]\n*.env\n"
 			if invalid {
-				identity, err := age.GenerateX25519Identity()
-				if err != nil {
-					t.Fatal(err)
-				}
+				identity := newIdentity(t)
 				rules += "[recipients]\n" + identity.Recipient().String() + "\n"
-				writeStatusFile(t, directory, "sub/.gitage", "[recipients]\nage1invalid\n")
+				writeFile(t, directory, "sub/.gitage", "[recipients]\nage1invalid\n")
 			}
-			writeStatusFile(t, directory, ".gitage", rules)
+			writeFile(t, directory, ".gitage", rules)
 			for _, path := range []string{"a.env", "sub/b.env"} {
-				writeStatusFile(t, directory, path, "secret")
+				writeFile(t, directory, path, "secret")
 			}
 			if _, err := runCommand(directory, "lock"); err == nil {
 				t.Fatal("expected recipient error")
@@ -128,16 +111,16 @@ func TestLockIgnoresSymlinkedRules(t *testing.T) {
 	initKeygenRepo(t, directory)
 	t.Setenv("GIT_AGE_KEY_FILE", "")
 	t.Setenv("GIT_AGE_RECIPIENT", "")
-	identity, linkedRecipient := rekeyIdentity(t), rekeyIdentity(t)
+	identity, linkedRecipient := newIdentity(t), newIdentity(t)
 	external := t.TempDir()
-	writeStatusFile(t, external, "identity.key", identity.String()+"\n")
-	writeStatusFile(t, external, "linked.gitage", "[files]\npublic.env\n[recipients]\n"+linkedRecipient.Recipient().String()+"\n")
+	writeFile(t, external, "identity.key", identity.String()+"\n")
+	writeFile(t, external, "linked.gitage", "[files]\npublic.env\n[recipients]\n"+linkedRecipient.Recipient().String()+"\n")
 	if err := os.Symlink(filepath.Join(external, "linked.gitage"), filepath.Join(directory, ".gitage")); err != nil {
 		t.Skipf("file symlinks unavailable: %v", err)
 	}
-	writeStatusFile(t, directory, "sub/.gitage", "[files]\nx.env\n")
-	writeStatusFile(t, directory, "sub/x.env", "secret\n")
-	writeStatusFile(t, directory, "public.env", "public\n")
+	writeFile(t, directory, "sub/.gitage", "[files]\nx.env\n")
+	writeFile(t, directory, "sub/x.env", "secret\n")
+	writeFile(t, directory, "public.env", "public\n")
 	runGit(t, directory, "config", "age.keyFile", filepath.Join(external, "identity.key"))
 	// Reproduce `git -c age.keyFile= age lock`, clearing the configured key.
 	t.Setenv("GIT_CONFIG_COUNT", "1")
@@ -157,11 +140,8 @@ func TestLockIgnoresSymlinkedRules(t *testing.T) {
 	if _, err := runCommand(directory, "lock", "-i", filepath.Join(external, "identity.key")); err != nil {
 		t.Fatal(err)
 	}
-	ciphertext, err := os.ReadFile(filepath.Join(directory, "sub/x.env"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertCleanDecrypts(t, ciphertext, identity, []byte("secret\n"))
+	ciphertext := readFile(t, directory, "sub/x.env")
+	assertDecrypts(t, ciphertext, identity, []byte("secret\n"))
 	if _, err := age.Decrypt(bytes.NewReader(ciphertext), linkedRecipient); err == nil {
 		t.Fatal("used a recipient from symlinked rules")
 	}
@@ -187,33 +167,17 @@ func TestLockNestedRecipients(t *testing.T) {
 				directory = alias
 			}
 
-			first, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
-			second, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+first.Recipient().String()+"\n")
-			writeStatusFile(t, directory, "sub/.gitage", "[recipients]\n"+second.Recipient().String()+"\n")
-			writeStatusFile(t, directory, "sub/a.env", "shared secret")
+			first := newIdentity(t)
+			second := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+first.Recipient().String()+"\n")
+			writeFile(t, directory, "sub/.gitage", "[recipients]\n"+second.Recipient().String()+"\n")
+			writeFile(t, directory, "sub/a.env", "shared secret")
 			if _, err := runCommand(filepath.Join(directory, "sub"), "lock"); err != nil {
 				t.Fatal(err)
 			}
-			content, err := os.ReadFile(filepath.Join(directory, "sub/a.env"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			content := readFile(t, directory, "sub/a.env")
 			for _, identity := range []age.Identity{first, second} {
-				reader, err := age.Decrypt(bytes.NewReader(content), identity)
-				if err != nil {
-					t.Fatal(err)
-				}
-				plaintext, err := io.ReadAll(reader)
-				if err != nil || string(plaintext) != "shared secret" {
-					t.Fatalf("decrypted: %q, %v", plaintext, err)
-				}
+				assertDecrypts(t, content, identity, []byte("shared secret"))
 			}
 		})
 	}
@@ -236,52 +200,37 @@ func TestLockReusesCiphertext(t *testing.T) {
 				directory = alias
 			}
 
-			identity, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
-			writeStatusFile(t, directory, ".gitage.key", identity.String()+"\n")
-			writeStatusFile(t, directory, "a.env", "secret")
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+			writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+			writeFile(t, directory, "a.env", "secret")
 			if _, err := runCommand(directory, "lock"); err != nil {
 				t.Fatal(err)
 			}
-			before, err := os.ReadFile(filepath.Join(directory, "a.env"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			before := readFile(t, directory, "a.env")
 			for _, args := range [][]string{{"add", ".gitage", "a.env"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "encrypted"}} {
 				if output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput(); err != nil {
 					t.Fatalf("git: %v: %s", err, output)
 				}
 			}
-			writeStatusFile(t, directory, "a.env", "secret")
+			writeFile(t, directory, "a.env", "secret")
 			if _, err := runCommand(directory, "lock"); err != nil {
 				t.Fatal(err)
 			}
-			after, err := os.ReadFile(filepath.Join(directory, "a.env"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			after := readFile(t, directory, "a.env")
 			if !bytes.Equal(before, after) {
 				t.Fatal("unchanged plaintext did not reuse ciphertext")
 			}
-			writeStatusFile(t, directory, "a.env", "secret")
+			writeFile(t, directory, "a.env", "secret")
 			if _, err := runCommand(directory, "lock", "--no-reuse"); err != nil {
 				t.Fatal(err)
 			}
-			after, err = os.ReadFile(filepath.Join(directory, "a.env"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			after = readFile(t, directory, "a.env")
 			if bytes.Equal(before, after) {
 				t.Fatal("--no-reuse reused ciphertext")
 			}
-			second, err := age.GenerateX25519Identity()
-			if err != nil {
-				t.Fatal(err)
-			}
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+second.Recipient().String()+"\n")
+			second := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+second.Recipient().String()+"\n")
 			if err := exec.Command("git", "-C", directory, "add", ".gitage").Run(); err != nil {
 				t.Fatal(err)
 			}
@@ -292,22 +241,12 @@ func TestLockReusesCiphertext(t *testing.T) {
 						t.Fatalf("commit: %v: %s", err, output)
 					}
 				}
-				writeStatusFile(t, directory, "a.env", "secret")
+				writeFile(t, directory, "a.env", "secret")
 				if _, err := runCommand(directory, "lock"); err != nil {
 					t.Fatal(err)
 				}
-				content, err := os.ReadFile(filepath.Join(directory, "a.env"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				reader, err := age.Decrypt(bytes.NewReader(content), second)
-				if err != nil {
-					t.Fatalf("recipient change, committed=%v: %v", committed, err)
-				}
-				plaintext, err := io.ReadAll(reader)
-				if err != nil || string(plaintext) != "secret" {
-					t.Fatalf("new recipient: %q, %v", plaintext, err)
-				}
+				content := readFile(t, directory, "a.env")
+				assertDecrypts(t, content, second, []byte("secret"))
 			}
 		})
 	}

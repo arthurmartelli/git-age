@@ -15,7 +15,7 @@ func Edit(directory string, file ProtectedFile, recipients, identities []string,
 		}
 		return edit(path)
 	}
-	_, err := encryptFiles(directory, []ProtectedFile{file}, recipients, identities, false, false, edit)
+	_, _, err := encryptFiles(directory, []ProtectedFile{file}, recipients, identities, encryptionOptions{edit: edit})
 	return err
 }
 

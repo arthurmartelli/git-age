@@ -34,24 +34,24 @@ func TestPreCommit(t *testing.T) {
 			if scenario == "empty encryption" || scenario == "allow empty" {
 				stagedText, workingText = "original\n", "original\n"
 			}
-			writeStatusFile(t, directory, "secret.env", stagedText)
+			writeFile(t, directory, "secret.env", stagedText)
 			runGit(t, directory, "add", "secret.env")
 			switch scenario {
 			case "partial staging":
 				workingText = "staged edit\nunstaged edit\n"
-				writeStatusFile(t, directory, "secret.env", workingText)
+				writeFile(t, directory, "secret.env", workingText)
 				diagnostic = "unstaged changes"
 			case "staged recipients":
-				extra = rekeyIdentity(t)
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+extra.Recipient().String()+"\n")
+				extra = newIdentity(t)
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+extra.Recipient().String()+"\n")
 				runGit(t, directory, "add", ".gitage")
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
 			case "nested recipients":
-				extra = rekeyIdentity(t)
-				writeStatusFile(t, directory, "sub/.gitage", "[recipients]\n"+extra.Recipient().String()+"\n")
-				writeStatusFile(t, directory, "sub/nested.env", "nested\n")
+				extra = newIdentity(t)
+				writeFile(t, directory, "sub/.gitage", "[recipients]\n"+extra.Recipient().String()+"\n")
+				writeFile(t, directory, "sub/nested.env", "nested\n")
 				runGit(t, directory, "add", "sub")
-				writeStatusFile(t, directory, "sub/.gitage", "[recipients]\n"+rekeyIdentity(t).Recipient().String()+"\n")
+				writeFile(t, directory, "sub/.gitage", "[recipients]\n"+newIdentity(t).Recipient().String()+"\n")
 			case "abort":
 				runGit(t, directory, "config", "age.hookMode", "abort")
 				wantCode, diagnostic = 1, "commit aborted"
@@ -62,20 +62,20 @@ func TestPreCommit(t *testing.T) {
 				t.Setenv("GIT_AGE_HOOK_MODE", "invalid")
 				wantCode, diagnostic = 2, "invalid choice"
 			case "private key":
-				writeStatusFile(t, directory, "leaked.txt", "AGE-SECRET-KEY-1SECRET")
+				writeFile(t, directory, "leaked.txt", "AGE-SECRET-KEY-1SECRET")
 				runGit(t, directory, "add", "leaked.txt")
 				wantCode, diagnostic = 1, "refusing to commit private age keys"
 			case "protected key":
 				stagedText, workingText = identity.String(), identity.String()
-				writeStatusFile(t, directory, "secret.env", stagedText)
+				writeFile(t, directory, "secret.env", stagedText)
 				runGit(t, directory, "add", "secret.env")
 			case "removed rules":
 				runGit(t, directory, "rm", ".gitage")
 				wantCode, diagnostic = 1, "refusing to commit the removal"
 			case "stale recipients", "allow stale":
-				writeStatusFile(t, directory, "secret.env", string(previous))
+				writeFile(t, directory, "secret.env", string(previous))
 				runGit(t, directory, "add", "secret.env")
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+rekeyIdentity(t).Recipient().String()+"\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+newIdentity(t).Recipient().String()+"\n")
 				runGit(t, directory, "add", ".gitage")
 				wantCode, diagnostic = 1, "still encrypted to the previous list"
 				if scenario == "allow stale" {
@@ -83,8 +83,8 @@ func TestPreCommit(t *testing.T) {
 					wantCode, diagnostic = 0, ""
 				}
 			case "bad second recipient":
-				writeStatusFile(t, directory, "z/.gitage", "[recipients]\nage1invalid\n")
-				writeStatusFile(t, directory, "z/b.env", "second secret\n")
+				writeFile(t, directory, "z/.gitage", "[recipients]\nage1invalid\n")
+				writeFile(t, directory, "z/b.env", "second secret\n")
 				runGit(t, directory, "add", "z")
 				wantCode, diagnostic = 1, "could not encrypt staged files"
 			case "bad identity":
@@ -143,11 +143,11 @@ func TestPreCommit(t *testing.T) {
 					t.Fatal("used unstaged recipients")
 				}
 			}
-			assertCleanDecrypts(t, staged, decrypting, []byte(stagedText))
+			assertDecrypts(t, staged, decrypting, []byte(stagedText))
 			if scenario == "nested recipients" {
 				nested := runGit(t, directory, "show", ":sub/nested.env")
-				assertCleanDecrypts(t, nested, identity, []byte("nested\n"))
-				assertCleanDecrypts(t, nested, extra, []byte("nested\n"))
+				assertDecrypts(t, nested, identity, []byte("nested\n"))
+				assertDecrypts(t, nested, extra, []byte("nested\n"))
 			}
 			working, err := os.ReadFile(filepath.Join(directory, "secret.env"))
 			if scenario == "missing working file" {
@@ -169,10 +169,10 @@ func TestPreCommitNoRules(t *testing.T) {
 	for _, localKey := range []bool{false, true} {
 		directory := t.TempDir()
 		initKeygenRepo(t, directory)
-		writeStatusFile(t, directory, "notes.txt", "AGE-SECRET-KEY-1 is a marker")
+		writeFile(t, directory, "notes.txt", "AGE-SECRET-KEY-1 is a marker")
 		runGit(t, directory, "add", "notes.txt")
 		if localKey {
-			writeStatusFile(t, directory, ".gitage.key", "local key")
+			writeFile(t, directory, ".gitage.key", "local key")
 			runGit(t, directory, "add", "-f", ".gitage.key")
 		}
 		var stdout, stderr bytes.Buffer
@@ -225,13 +225,13 @@ func TestHookGitCommit(t *testing.T) {
 				t.Setenv("GIT_DIR", installGitPath(t, directory, "."))
 				t.Setenv("GIT_WORK_TREE", directory)
 			}
-			writeStatusFile(t, directory, "secret.env", "staged edit\n")
+			writeFile(t, directory, "secret.env", "staged edit\n")
 			runGit(t, directory, "add", "secret.env")
 			if scenario == "partial staging" {
-				writeStatusFile(t, directory, "secret.env", "staged edit\nunstaged edit\n")
+				writeFile(t, directory, "secret.env", "staged edit\nunstaged edit\n")
 			}
 			if scenario == "commit only" {
-				writeStatusFile(t, directory, "other.env", "another staged file\n")
+				writeFile(t, directory, "other.env", "another staged file\n")
 				runGit(t, directory, "add", "other.env")
 				runGit(t, directory, "commit", "-qm", "only secret", "--only", "secret.env")
 				if output := runGit(t, directory, "show", ":other.env"); string(output) != "another staged file\n" {
@@ -243,11 +243,8 @@ func TestHookGitCommit(t *testing.T) {
 			} else {
 				runGit(t, directory, "commit", "-qm", "encrypted edit")
 			}
-			assertCleanDecrypts(t, runGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("staged edit\n"))
-			working, err := os.ReadFile(filepath.Join(directory, "secret.env"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			assertDecrypts(t, runGit(t, directory, "show", "HEAD:secret.env"), identity, []byte("staged edit\n"))
+			working := readFile(t, directory, "secret.env")
 			if scenario == "partial staging" {
 				if string(working) != "staged edit\nunstaged edit\n" {
 					t.Fatal("commit overwrote unstaged edits")
@@ -260,7 +257,7 @@ func TestHookGitCommit(t *testing.T) {
 					t.Fatalf("unchanged unlocked file shows modified: %s", status)
 				}
 			} else {
-				assertCleanDecrypts(t, working, identity, []byte("staged edit\n"))
+				assertDecrypts(t, working, identity, []byte("staged edit\n"))
 			}
 			if scenario == "lock unlock status" {
 				for _, command := range []string{"unlock", "lock"} {

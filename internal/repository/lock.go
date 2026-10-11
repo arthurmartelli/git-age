@@ -13,88 +13,88 @@ import (
 	"filippo.io/age/agessh"
 )
 
-type encryptionResult struct {
-	skipped, noAccess []ProtectedFile
+type encryptionOptions struct {
+	noReuse, rekey bool
+	edit           func(string) error
 }
 
 func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse bool) ([]ProtectedFile, error) {
-	result, err := encryptFiles(directory, files, explicitRecipients, identityPaths, noReuse, false, nil)
-	return result.noAccess, err
+	_, noAccess, err := encryptFiles(directory, files, explicitRecipients, identityPaths, encryptionOptions{noReuse: noReuse})
+	return noAccess, err
 }
 
 func Rekey(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string) ([]ProtectedFile, error) {
-	result, err := encryptFiles(directory, files, explicitRecipients, identityPaths, true, true, nil)
-	return result.skipped, err
+	skipped, _, err := encryptFiles(directory, files, explicitRecipients, identityPaths, encryptionOptions{noReuse: true, rekey: true})
+	return skipped, err
 }
 
-func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, rekey bool, edit func(string) error) (encryptionResult, error) {
+func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, options encryptionOptions) (skipped, noAccess []ProtectedFile, err error) {
 	if err := CheckKnown(files); err != nil {
-		return encryptionResult{}, err
+		return nil, nil, err
 	}
 	var pending []ProtectedFile
 	for _, file := range files {
-		if rekey || edit != nil || file.State != Locked {
+		if options.rekey || options.edit != nil || file.State != Locked {
 			pending = append(pending, file)
 		}
 	}
 	if len(pending) == 0 {
-		return encryptionResult{}, nil
+		return nil, nil, nil
 	}
 	directory, root, inGit, err := resolveDirectory(directory)
 	if err != nil {
-		return encryptionResult{}, err
+		return nil, nil, err
 	}
 	if inGit {
 		if err := checkRecipientTrust(directory); err != nil {
-			return encryptionResult{}, err
+			return nil, nil, err
 		}
 	}
 	keys, err := loadKeys(directory, root, explicitRecipients, identityPaths, nil)
 	if err != nil {
-		return encryptionResult{}, err
+		return nil, nil, err
 	}
 
 	var replacements []replacement
-	var skipped, noAccess []ProtectedFile
 	for _, file := range pending {
 		path := nativePath(directory, file.Path)
 		target, err := keys.target(root, path, nil)
 		if err != nil {
-			return encryptionResult{}, fmt.Errorf("%s: %w", file.Path, err)
+			return nil, nil, fmt.Errorf("%s: %w", file.Path, err)
 		}
 		original, err := os.ReadFile(path)
 		if err != nil {
-			return encryptionResult{}, err
+			return nil, nil, err
 		}
 		plaintext := original
-		if (rekey || edit != nil) && file.State == Locked {
-			if len(keys.identities) == 0 {
-				return encryptionResult{}, errNoIdentity
-			}
+		if (options.rekey || options.edit != nil) && file.State == Locked {
 			plaintext, err = decryptContent(original, keys.identities)
+			if errors.Is(err, errNoIdentity) {
+				return nil, nil, err
+			}
 			if err != nil {
 				var noMatch *age.NoIdentityMatchError
-				if rekey && errors.As(err, &noMatch) && !containsRecipient(target.values, keys.own) {
+				if options.rekey && errors.As(err, &noMatch) && !containsRecipient(target.values, keys.own) {
 					// A team member may only have access to part of the repository.
 					skipped = append(skipped, file)
 					continue
 				}
-				return encryptionResult{}, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
+				return nil, nil, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 			}
 		}
-		if edit != nil {
+		if options.edit != nil {
 			before := plaintext
-			plaintext, err = editPlaintext(file.Path, plaintext, edit)
+			plaintext, err = editPlaintext(file.Path, plaintext, options.edit)
 			if err != nil {
-				return encryptionResult{}, fmt.Errorf("%w; %s was not changed", err, file.Path)
+				return nil, nil, fmt.Errorf("%w; %s was not changed", err, file.Path)
 			}
 			if bytes.Equal(before, plaintext) {
 				continue
 			}
 		}
-		encrypted, err := keys.encrypt(root, path, target, plaintext, inGit && !noReuse)
+		encrypted, err := keys.encrypt(root, path, target, plaintext, inGit && !options.noReuse)
 		if err != nil {
-			return encryptionResult{}, err
+			return nil, nil, err
 		}
 		replacements = append(replacements, replacement{path, original, encrypted})
 		if len(keys.own) != 0 && !containsRecipient(target.values, keys.own) {
@@ -102,9 +102,9 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 		}
 	}
 	if len(replacements) == 0 && len(skipped) != 0 {
-		return encryptionResult{}, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
+		return nil, nil, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
 	}
-	return encryptionResult{skipped, noAccess}, replaceFiles(replacements)
+	return skipped, noAccess, replaceFiles(replacements)
 }
 
 func checkRecipientTrust(directory string) error {
@@ -117,8 +117,6 @@ func checkRecipientTrust(directory string) error {
 	}
 	return nil
 }
-
-var errNoIdentity = errors.New("no identity configured; use -i or generate a key with git-age keygen")
 
 // keys holds the identities and base recipients for encrypting files.
 type keys struct {
@@ -265,6 +263,7 @@ func parseRecipients(values []string) ([]age.Recipient, error) {
 
 func reusableCiphertext(root, path string, rules []string, plaintext []byte, identities []age.Identity) []byte {
 	if len(identities) == 0 {
+		// Reuse needs decryption; avoid spawning Git when no identity can decrypt.
 		return nil
 	}
 	relative, _ := filepath.Rel(root, path)

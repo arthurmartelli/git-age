@@ -16,7 +16,7 @@ func TestUninstall(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			workingDirectory := directory
 			if scenario == "linked worktree" {
 				runGit(t, directory, "config", "user.name", "Test")
@@ -33,7 +33,7 @@ func TestUninstall(t *testing.T) {
 			}
 			attributes := installGitPath(t, workingDirectory, "info/attributes")
 			prefix, suffix := "# user prefix\r\n*.txt diff=custom\r\n", "*.md diff=markdown\r\n# user suffix\r\n"
-			writeStatusFile(t, filepath.Dir(attributes), "attributes", prefix)
+			writeFile(t, filepath.Dir(attributes), "attributes", prefix)
 			if _, err := runCommand(workingDirectory, "install", "--mode=always-lock", "--unlock-after-commit"); err != nil {
 				t.Fatal(err)
 			}
@@ -69,15 +69,15 @@ func TestUninstall(t *testing.T) {
 			if writeErr != nil || closeErr != nil {
 				t.Fatalf("config: %v, %v", writeErr, closeErr)
 			}
-			writeStatusFile(t, workingDirectory, "locked.env", "age-encryption.org/v1\nciphertext\n")
-			writeStatusFile(t, workingDirectory, "unlocked.env", "secret\n")
-			writeStatusFile(t, workingDirectory, ".gitage.key", "private key\n")
+			writeFile(t, workingDirectory, "locked.env", "age-encryption.org/v1\nciphertext\n")
+			writeFile(t, workingDirectory, "unlocked.env", "secret\n")
+			writeFile(t, workingDirectory, ".gitage.key", "private key\n")
 			if scenario == "missing rules" {
 				if err := os.Remove(filepath.Join(workingDirectory, ".gitage")); err != nil {
 					t.Fatal(err)
 				}
 			} else if scenario == "malformed rules" {
-				writeStatusFile(t, workingDirectory, ".gitage", "[unknown]\n")
+				writeFile(t, workingDirectory, ".gitage", "[unknown]\n")
 			}
 			beforeIndex := runGit(t, workingDirectory, "ls-files", "--stage", "-z")
 			beforeFiles := map[string][]byte{}
@@ -91,7 +91,7 @@ func TestUninstall(t *testing.T) {
 			}
 			hooks := installGitPath(t, workingDirectory, "hooks")
 			if scenario == "subdirectory" || scenario == "relative hooks path" {
-				writeStatusFile(t, directory, "sub/.keep", "")
+				writeFile(t, directory, "sub/.keep", "")
 				workingDirectory = filepath.Join(directory, "sub")
 			}
 			output, err := runCommand(workingDirectory, "uninstall")
@@ -163,7 +163,7 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 			case "missing installation":
 				want = "git-age: nothing to uninstall"
 			case "broken attributes":
-				writeStatusFile(t, filepath.Dir(attributes), "attributes", "# BEGIN git-age (generated from .gitage; do not edit)\n# user data\n")
+				writeFile(t, filepath.Dir(attributes), "attributes", "# BEGIN git-age (generated from .gitage; do not edit)\n# user data\n")
 			case "symlink attributes", "directory attributes":
 				if err := os.Remove(attributes); err != nil {
 					t.Fatal(err)
@@ -173,7 +173,7 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 						t.Fatal(err)
 					}
 				} else {
-					writeStatusFile(t, directory, "target", "# user data\n")
+					writeFile(t, directory, "target", "# user data\n")
 					if err := os.Symlink(filepath.Join(directory, "target"), attributes); err != nil {
 						t.Skipf("symlinks unavailable: %v", err)
 					}
@@ -220,15 +220,15 @@ func TestUninstallKeepsUnmanagedHooks(t *testing.T) {
 			}
 			switch scenario {
 			case "other tool":
-				writeStatusFile(t, hooks, "post-rewrite", "#!/bin/sh\n# other tool\n")
+				writeFile(t, hooks, "post-rewrite", "#!/bin/sh\n# other tool\n")
 			case "wrong marker":
-				writeStatusFile(t, hooks, "post-rewrite", "#!/bin/sh\n# git-age managed pre-commit hook\n")
+				writeFile(t, hooks, "post-rewrite", "#!/bin/sh\n# git-age managed pre-commit hook\n")
 			case "directory":
 				if err := os.Mkdir(path, 0755); err != nil {
 					t.Fatal(err)
 				}
 			case "symlink":
-				writeStatusFile(t, directory, "target", "# git-age managed post-rewrite hook\n")
+				writeFile(t, directory, "target", "# git-age managed post-rewrite hook\n")
 				if err := os.Symlink(filepath.Join(directory, "target"), path); err != nil {
 					t.Skipf("symlinks unavailable: %v", err)
 				}
@@ -254,7 +254,7 @@ func TestUninstallKeepsInheritedConfig(t *testing.T) {
 	initKeygenRepo(t, directory)
 	globalDirectory := t.TempDir()
 	global := "[age]\nhookMode = abort\nunlockAfterCommit = true\n[diff \"age\"]\ntextconv = global\ncachetextconv = false\n[merge \"age\"]\ndriver = global\n[filter \"age\"]\nclean = global\n"
-	writeStatusFile(t, globalDirectory, "gitconfig", global)
+	writeFile(t, globalDirectory, "gitconfig", global)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
 	if _, err := runCommand(directory, "install", "--mode=always-lock"); err != nil {
 		t.Fatal(err)

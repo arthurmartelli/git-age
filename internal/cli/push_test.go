@@ -55,7 +55,7 @@ func TestPrePushGitHook(t *testing.T) {
 			t.Fatalf("push %s: %v, %s", refspec, err, output)
 		}
 	}
-	writeStatusFile(t, directory, "secret.env", "leaked\n")
+	writeFile(t, directory, "secret.env", "leaked\n")
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "--no-verify", "-qm", "plaintext")
 	refuse("HEAD:refs/heads/main", "secret.env")
@@ -75,14 +75,14 @@ func TestPrePushGitHook(t *testing.T) {
 		t.Fatalf("override was not reported: %s", output)
 	}
 	t.Setenv("GIT_AGE_ALLOW_PLAINTEXT_PUSH", "")
-	writeStatusFile(t, directory, "secret.env", "new safe edit\n")
+	writeFile(t, directory, "secret.env", "new safe edit\n")
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "-qm", "safe edit")
 	runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")
 	// Already published plaintext does not block an unrelated new branch.
 	runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/safe-copy")
 	runGit(t, directory, "checkout", "-qb", "leak")
-	writeStatusFile(t, directory, "secret.env", "branch leak\n")
+	writeFile(t, directory, "secret.env", "branch leak\n")
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "--no-verify", "-qm", "branch leak")
 	refuse("leak:refs/heads/leak", "secret.env")
@@ -95,7 +95,7 @@ func TestPrePushGitHook(t *testing.T) {
 	runGit(t, directory, "cherry-pick", "leak")
 	refuse("replayed:refs/heads/replayed", "secret.env")
 	runGit(t, directory, "checkout", "-qb", "keys", "origin/main")
-	writeStatusFile(t, directory, "k.txt", rekeyIdentity(t).String()+"\n")
+	writeFile(t, directory, "k.txt", newIdentity(t).String()+"\n")
 	runGit(t, directory, "add", "k.txt")
 	runGit(t, directory, "commit", "--no-verify", "-qm", "private key")
 	refuse("keys:refs/heads/keys", "Private age keys in the commits being pushed")
@@ -103,7 +103,7 @@ func TestPrePushGitHook(t *testing.T) {
 	runGit(t, directory, "commit", "-qm", "remove key")
 	refuse("keys:refs/heads/keys", "k.txt")
 	runGit(t, directory, "switch", "--orphan", "no-rules")
-	writeStatusFile(t, directory, "notes.txt", "AGE-SECRET-KEY-1 is a marker\n")
+	writeFile(t, directory, "notes.txt", "AGE-SECRET-KEY-1 is a marker\n")
 	runGit(t, directory, "add", "notes.txt")
 	runGit(t, directory, "commit", "-qm", "no rules")
 	if output := runGit(t, directory, "push", "-q", "origin", "no-rules:refs/heads/no-rules"); len(output) != 0 {
@@ -137,22 +137,22 @@ func TestCheckPushUsesCurrentAndHistoricalRules(t *testing.T) {
 			if scenario == "empty" {
 				content = ""
 			}
-			writeStatusFile(t, directory, "secret.env", content)
+			writeFile(t, directory, "secret.env", content)
 			if scenario != "before rules" && scenario != "local key" {
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			}
 			if scenario == "local key" {
-				writeStatusFile(t, directory, ".gitage.key", "not a key")
+				writeFile(t, directory, ".gitage.key", "not a key")
 			}
 			runGit(t, directory, "add", "-f", ".")
 			runGit(t, directory, "commit", "-qm", "plaintext version")
 			if scenario == "before rules" {
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			} else if scenario == "removed rules" {
 				runGit(t, directory, "rm", ".gitage")
 				runGit(t, directory, "commit", "-qm", "remove rules")
 			} else if scenario == "negation" {
-				writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n!secret.env\n")
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n!secret.env\n")
 			}
 			tip := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))
 			input := "refs/heads/main " + tip + " refs/heads/main " + strings.Repeat("0", len(tip)) + "\n"
@@ -202,24 +202,24 @@ func TestPrePushProtocol(t *testing.T) {
 
 func TestCheckPushMergeResolution(t *testing.T) {
 	directory, identity, _ := cleanFixture(t, []byte("base\n"), false)
-	writeStatusFile(t, directory, ".gitattributes", "secret.env -merge\n")
+	writeFile(t, directory, ".gitattributes", "secret.env -merge\n")
 	runGit(t, directory, "add", ".gitattributes")
 	runGit(t, directory, "commit", "-qm", "binary merge")
 	runGit(t, directory, "branch", "ours")
 	runGit(t, directory, "checkout", "-qb", "theirs")
-	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "theirs\n", false)))
+	writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "theirs\n", false)))
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "-qm", "theirs")
 	runGit(t, directory, "update-ref", "refs/remotes/origin/theirs", "HEAD")
 	runGit(t, directory, "checkout", "-q", "ours")
-	writeStatusFile(t, directory, "secret.env", string(encryptUnlockFixture(t, identity, "ours\n", false)))
+	writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "ours\n", false)))
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "-qm", "ours")
 	previous := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))
 	if err := exec.Command("git", "-C", directory, "merge", "--no-edit", "theirs").Run(); err == nil {
 		t.Fatal("expected a merge conflict")
 	}
-	writeStatusFile(t, directory, "secret.env", "plaintext resolution\n")
+	writeFile(t, directory, "secret.env", "plaintext resolution\n")
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "--no-verify", "-qm", "plaintext merge resolution")
 	tip := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))

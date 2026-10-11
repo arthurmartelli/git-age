@@ -11,12 +11,9 @@ import (
 )
 
 func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
-	root, err := gitRoot(directory)
+	root, err := Root(directory, "uninstall")
 	if err != nil {
 		return err
-	}
-	if root == "" {
-		return fmt.Errorf("uninstall requires a Git worktree")
 	}
 	hooks, err := gitPath(root, "hooks")
 	if err != nil {
@@ -58,7 +55,7 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	existing, mode, _, err := readInstallFile(attributes)
+	existing, mode, err := readInstallFile(attributes)
 	if err != nil {
 		return err
 	}

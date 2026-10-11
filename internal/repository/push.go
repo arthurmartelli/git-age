@@ -19,12 +19,9 @@ type PushCheck struct {
 // commits already known to the remote. It never changes the worktree or index.
 func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 	var result PushCheck
-	root, err := gitRoot(directory)
+	root, err := Root(directory, "pre-push")
 	if err != nil {
 		return result, err
-	}
-	if root == "" {
-		return result, fmt.Errorf("pre-push requires a Git worktree")
 	}
 	historyGit := func(args ...string) ([]byte, error) {
 		output, err := git(root, args...)

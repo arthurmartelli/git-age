@@ -31,8 +31,8 @@ func TestMalformedPatternsRefusedBeforeChanges(t *testing.T) {
 		t.Run(test.pattern, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\n"+test.pattern+"\n")
-			writeStatusFile(t, directory, "secret.env", "plaintext\n")
+			writeFile(t, directory, ".gitage", "[files]\n"+test.pattern+"\n")
+			writeFile(t, directory, "secret.env", "plaintext\n")
 			runGit(t, directory, "add", ".gitage", "secret.env")
 			before := installSnapshot(t, directory)
 			for _, args := range [][]string{{"status"}, {"lock"}, {"check", "--cached"}, {"install"}} {
@@ -71,8 +71,8 @@ func TestValidPatternSyntaxStillMatchesGit(t *testing.T) {
 			}
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			writeStatusFile(t, directory, ".gitage", "[files]\r\n"+test.pattern+"\r\n")
-			writeStatusFile(t, directory, test.name, "plaintext\n")
+			writeFile(t, directory, ".gitage", "[files]\r\n"+test.pattern+"\r\n")
+			writeFile(t, directory, test.name, "plaintext\n")
 			output, err := runCommand(directory, "status")
 			if err != nil || output != "UNLOCKED   "+test.name+"\n" {
 				t.Fatalf("valid pattern: %v, %q", err, output)
@@ -84,8 +84,8 @@ func TestValidPatternSyntaxStillMatchesGit(t *testing.T) {
 func TestInvalidRecipientDiagnostic(t *testing.T) {
 	directory := t.TempDir()
 	initKeygenRepo(t, directory)
-	writeStatusFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\nnot-a-key\n")
-	writeStatusFile(t, directory, "secret.env", "secret\n")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\nnot-a-key\n")
+	writeFile(t, directory, "secret.env", "secret\n")
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{"-C", directory, "status"}, &stdout, &stderr)
 	if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), ".gitage:4: is not an age recipient") {
@@ -102,14 +102,14 @@ func TestProtectedIdentityRefusalChangesNothing(t *testing.T) {
 			diagnostic := "encrypted age identity"
 			switch format {
 			case "recipient", "recipient armored":
-				protected = encryptUnlockFixture(t, identity, identity.String()+"\n", format == "recipient armored")
+				protected = encryptFixture(t, identity.Recipient(), identity.String()+"\n", format == "recipient armored")
 			case "scrypt", "scrypt armored":
 				recipient, err := age.NewScryptRecipient("test passphrase")
 				if err != nil {
 					t.Fatal(err)
 				}
 				recipient.SetWorkFactor(1)
-				protected = encryptRecipientFixture(t, recipient, identity.String()+"\n", format == "scrypt armored")
+				protected = encryptFixture(t, recipient, identity.String()+"\n", format == "scrypt armored")
 			case "SSH", "PEM":
 				diagnostic = "passphrase-protected"
 				_, key, err := ed25519.GenerateKey(rand.Reader)
@@ -131,7 +131,7 @@ func TestProtectedIdentityRefusalChangesNothing(t *testing.T) {
 				}
 				protected = pem.EncodeToMemory(block)
 			}
-			writeStatusFile(t, directory, "protected.key", string(protected))
+			writeFile(t, directory, "protected.key", string(protected))
 			before := installSnapshot(t, directory)
 			var stdout, stderr bytes.Buffer
 			code := Run([]string{"-C", directory, "unlock", "-i", "protected.key"}, &stdout, &stderr)
@@ -152,8 +152,8 @@ func TestLockWarnsForExcludedIdentity(t *testing.T) {
 			t.Setenv("GIT_AGE_RECIPIENT", "")
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			own, other := rekeyIdentity(t), rekeyIdentity(t)
-			writeStatusFile(t, directory, ".gitage.key", own.String()+"\n")
+			own, other := newIdentity(t), newIdentity(t)
+			writeFile(t, directory, ".gitage.key", own.String()+"\n")
 			rules := "[files]\n*.env\n[recipients]\n" + other.Recipient().String() + "\n"
 			path := "secret.env"
 			var decrypting age.Identity = other
@@ -161,10 +161,10 @@ func TestLockWarnsForExcludedIdentity(t *testing.T) {
 			case "included":
 				rules += own.Recipient().String() + "\n"
 			case "multiple identities":
-				writeStatusFile(t, directory, ".gitage.key", own.String()+"\n"+other.String()+"\n")
+				writeFile(t, directory, ".gitage.key", own.String()+"\n"+other.String()+"\n")
 			case "nested recipient":
 				path = "sub/secret.env"
-				writeStatusFile(t, directory, "sub/.gitage", "[recipients]\n"+own.Recipient().String()+"\n")
+				writeFile(t, directory, "sub/.gitage", "[recipients]\n"+own.Recipient().String()+"\n")
 			case "no identity":
 				if err := os.Remove(filepath.Join(directory, ".gitage.key")); err != nil {
 					t.Fatal(err)
@@ -178,7 +178,7 @@ func TestLockWarnsForExcludedIdentity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				writeStatusFile(t, directory, ".gitage.key", string(pem.EncodeToMemory(block)))
+				writeFile(t, directory, ".gitage.key", string(pem.EncodeToMemory(block)))
 				signer, err := ssh.NewSignerFromKey(key)
 				if err != nil {
 					t.Fatal(err)
@@ -189,8 +189,8 @@ func TestLockWarnsForExcludedIdentity(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			writeStatusFile(t, directory, ".gitage", rules)
-			writeStatusFile(t, directory, path, "secret\n")
+			writeFile(t, directory, ".gitage", rules)
+			writeFile(t, directory, path, "secret\n")
 			var stdout, stderr bytes.Buffer
 			code := Run([]string{"-C", directory, "lock"}, &stdout, &stderr)
 			if code != 0 || stdout.Len() != 0 {
@@ -203,11 +203,8 @@ func TestLockWarnsForExcludedIdentity(t *testing.T) {
 			} else if stderr.Len() != 0 {
 				t.Fatalf("unnecessary warning: %q", &stderr)
 			}
-			ciphertext, err := os.ReadFile(filepath.Join(directory, path))
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertCleanDecrypts(t, ciphertext, decrypting, []byte("secret\n"))
+			ciphertext := readFile(t, directory, path)
+			assertDecrypts(t, ciphertext, decrypting, []byte("secret\n"))
 			if scenario == "excluded" {
 				if _, err := age.Decrypt(bytes.NewReader(ciphertext), own); err == nil {
 					t.Fatal("warning must not silently add the excluded identity")

@@ -34,6 +34,8 @@ func configValues(directory, key string, flags ...string) ([]string, error) {
 	return values, nil
 }
 
+var errNoIdentity = errors.New("no identity configured; use -i or generate a key with git-age keygen")
+
 func loadIdentities(directory, root string, paths []string) ([]age.Identity, []string, error) {
 	if len(paths) == 0 {
 		paths = filepath.SplitList(os.Getenv("GIT_AGE_KEY_FILE"))
