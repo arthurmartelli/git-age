@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      CGO_ENABLED: "0"
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build
+        run: |
+          mkdir dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            os=${target%/*} arch=${target#*/}
+            ext=; [ "$os" = windows ] && ext=.exe
+            GOOS=$os GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X github.com/arthurmartelli/git-age/internal/cli.version=$TAG" \
+              -o "dist/git-age_${TAG}_${os}_${arch}${ext}" ./cmd/git-age
+          done
+          cd dist && sha256sum -- * >checksums.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" dist/* --verify-tag --generate-notes --title "$TAG"

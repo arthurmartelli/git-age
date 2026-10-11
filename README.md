@@ -8,7 +8,11 @@ A `.gitage` file defines which files are protected and who can decrypt them. Pri
 
 ## Install
 
-Requires Git. Install with Go 1.25+:
+Requires Git.
+
+Download a prebuilt executable for Linux, macOS or Windows from the [releases page](https://github.com/arthurmartelli/git-age/releases), check it against `checksums.txt`, rename it to `git-age` (`git-age.exe` on Windows), make it executable and put it on your `PATH`.
+
+Or install with Go 1.25+:
 
 ```sh
 CGO_ENABLED=0 go install github.com/arthurmartelli/git-age/cmd/git-age@latest

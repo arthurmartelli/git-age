@@ -38,6 +38,7 @@ func newRootCommand() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "git-age",
 		Short:         "Lock and unlock files selected by .gitage rules using age.",
+		Version:       buildVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -50,6 +51,7 @@ func newRootCommand() *cobra.Command {
 	flags.BoolVarP(&options.dryRun, "dry-run", "n", false, "show what would happen without modifying files")
 	flags.BoolVarP(&options.verbose, "verbose", "v", false, "show detailed operation information")
 
+	root.SetVersionTemplate("git-age {{.Version}}\n")
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SetHelpCommand(newHelpCommand())
 	root.AddCommand(
