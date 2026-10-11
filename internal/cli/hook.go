@@ -51,7 +51,10 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 				return nil
 			}
 			if err == nil {
-				err = repository.Unlock(root, files, nil)
+				var skips repository.UnlockSkips
+				if skips, err = repository.Unlock(root, files, nil); err == nil {
+					err = reportUnlockSkips(cmd, options, skips)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("commit succeeded, but automatic unlock failed: %w", err)

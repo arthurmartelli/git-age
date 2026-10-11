@@ -35,13 +35,13 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 	}
 	original := contents[1]
 	if locked {
-		identities, _, err := loadIdentities(directory, root, nil)
+		identities, err := loadIdentities(directory, root, nil)
 		if err != nil {
 			return false, err
 		}
 		for i, content := range contents {
 			if contentState(content) == Locked {
-				contents[i], err = decryptContent(content, identities)
+				contents[i], err = decryptContent(content, identities.identities)
 				if errors.Is(err, errNoIdentity) {
 					return false, err
 				}

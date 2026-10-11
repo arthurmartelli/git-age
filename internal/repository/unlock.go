@@ -11,9 +11,17 @@ import (
 	"filippo.io/age/armor"
 )
 
-func Unlock(directory string, files []ProtectedFile, identityPaths []string) error {
+// UnlockSkips lists the locked files Unlock leaves alone.
+type UnlockSkips struct {
+	NoAccess   []ProtectedFile // Not encrypted to the user.
+	NotRekeyed []ProtectedFile // Still encrypted to recipients from before the user was added.
+}
+
+// Unlock decrypts the locked files, all or none of those it does not skip.
+func Unlock(directory string, files []ProtectedFile, identityPaths []string) (UnlockSkips, error) {
+	var skips UnlockSkips
 	if err := CheckKnown(files); err != nil {
-		return err
+		return skips, err
 	}
 	var pending []ProtectedFile
 	for _, file := range files {
@@ -22,16 +30,18 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 		}
 	}
 	if len(pending) == 0 {
-		return nil
+		return skips, nil
 	}
-	directory, root, _, err := resolveDirectory(directory)
+	directory, root, inGit, err := resolveDirectory(directory)
 	if err != nil {
-		return err
+		return skips, err
 	}
-	identities, _, err := loadIdentities(directory, root, identityPaths)
+	identities, err := loadIdentities(directory, root, identityPaths)
 	if err != nil {
-		return err
+		return skips, err
 	}
+	var userKeys *keys
+	history := newRecipientHistory(root, inGit)
 
 	// Authenticate all ciphertexts first so a bad file cannot leave a partial unlock.
 	var replacements []replacement
@@ -39,18 +49,44 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) err
 		path := nativePath(directory, file.Path)
 		original, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return skips, err
 		}
-		plaintext, err := decryptContent(original, identities)
+		plaintext, err := decryptContent(original, identities.identities)
 		if errors.Is(err, errNoIdentity) {
-			return err
+			return skips, err
+		}
+		var noMatch *age.NoIdentityMatchError
+		if errors.As(err, &noMatch) {
+			if userKeys == nil {
+				resolved, err := resolveKeys(directory, root, nil, identities, nil)
+				if err != nil {
+					return skips, err
+				}
+				userKeys = &resolved
+			}
+			target, err := userKeys.describeTarget(root, path, nil)
+			if err != nil {
+				return skips, err
+			}
+			mine, err := userKeys.encryptedToUser(target)
+			if err != nil {
+				return skips, err
+			}
+			if !mine {
+				skips.NoAccess = append(skips.NoAccess, file)
+				continue
+			}
+			if history.stale(path) {
+				skips.NotRekeyed = append(skips.NotRekeyed, file)
+				continue
+			}
 		}
 		if err != nil {
-			return fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
+			return skips, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 		}
 		replacements = append(replacements, replacement{path, original, plaintext})
 	}
-	return replaceFiles(replacements)
+	return skips, replaceFiles(replacements)
 }
 
 func decryptContent(content []byte, identities []age.Identity) ([]byte, error) {

@@ -33,11 +33,11 @@ func textconvDecrypt(directory string, content []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	identities, _, err := loadIdentities(directory, root, nil)
+	identities, err := loadIdentities(directory, root, nil)
 	if err != nil {
 		return nil, err
 	}
-	plaintext, err := decryptContent(content, identities)
+	plaintext, err := decryptContent(content, identities.identities)
 	if errors.Is(err, errNoIdentity) {
 		return nil, fmt.Errorf("no identity configured")
 	}

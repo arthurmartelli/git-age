@@ -74,10 +74,14 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 			}
 			if err != nil {
 				var noMatch *age.NoIdentityMatchError
-				if options.rekey && errors.As(err, &noMatch) && !containsRecipient(target.values, keys.own) {
+				if options.rekey && errors.As(err, &noMatch) {
 					// A team member may only have access to part of the repository.
-					skipped = append(skipped, file)
-					continue
+					if mine, checkErr := keys.encryptedToUser(target); checkErr != nil {
+						return nil, nil, checkErr
+					} else if !mine {
+						skipped = append(skipped, file)
+						continue
+					}
 				}
 				return nil, nil, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 			}
@@ -120,57 +124,103 @@ func checkRecipientTrust(directory string) error {
 
 // keys holds the identities and base recipients for encrypting files.
 type keys struct {
-	identities []age.Identity
-	own        []string // Recipients of the identities.
-	base       []string
-	external   bool // Base recipients come from outside the .gitage rules.
+	identitySet
+	base     []string
+	external bool // Base recipients come from outside the .gitage rules.
+	// Without a base list, files are encrypted to the identities of whoever
+	// locks them, and base holds the user's own recipients.
+	toIdentities bool
+	source       string // Where base comes from, for messages.
+	root         string
+	rules        map[string][]byte
+	listed       *[]string // Every [recipients] entry in the repository, once read.
 }
+
+var errNoKey = errors.New("no encryption key configured; use -r, [recipients], or an age identity")
 
 // loadKeys reads the base recipients from rules, or from the .gitage files on
 // disk when rules is nil.
 func loadKeys(directory, root string, explicitRecipients, identityPaths []string, rules map[string][]byte) (keys, error) {
-	var k keys
-	var err error
-	k.identities, k.own, err = loadIdentities(directory, root, identityPaths)
+	identities, err := loadIdentities(directory, root, identityPaths)
 	if err != nil {
-		return k, err
+		return keys{}, err
 	}
-	k.base = explicitRecipients
-	if len(k.base) == 0 && os.Getenv("GIT_AGE_RECIPIENT") != "" {
-		k.base = []string{os.Getenv("GIT_AGE_RECIPIENT")}
+	k, err := resolveKeys(directory, root, explicitRecipients, identities, rules)
+	if err == nil && len(k.base) == 0 {
+		err = errNoKey
 	}
-	k.external = len(k.base) != 0
-	if len(k.base) == 0 {
-		k.base, err = ruleRecipients(filepath.Join(root, ".gitage"), rules)
-		if err != nil {
+	return k, err
+}
+
+// resolveKeys finds the base recipients; the first source that is set wins.
+func resolveKeys(directory, root string, explicitRecipients []string, identities identitySet, rules map[string][]byte) (keys, error) {
+	k := keys{identitySet: identities, root: root, rules: rules, listed: new([]string)}
+	top := filepath.Join(root, ".gitage")
+	var err error
+	switch environment := os.Getenv("GIT_AGE_RECIPIENT"); {
+	case len(explicitRecipients) != 0:
+		k.base, k.source, k.external = explicitRecipients, "-r/--recipient", true
+	case environment != "":
+		k.base, k.source, k.external = []string{environment}, "GIT_AGE_RECIPIENT", true
+	default:
+		if k.base, err = ruleRecipients(top, rules); err != nil {
 			return k, err
 		}
-	}
-	if len(k.base) == 0 {
-		k.base, err = configValues(directory, "age.recipient")
-		if err != nil {
+		if len(k.base) != 0 {
+			k.source = displayPath(directory, top) + " [recipients]"
+			break
+		}
+		if k.base, err = configValues(directory, "age.recipient"); err != nil {
 			return k, err
 		}
-		k.external = len(k.base) != 0
-	}
-	if len(k.base) == 0 {
-		k.base = k.own
-	}
-	if len(k.base) == 0 {
-		return k, fmt.Errorf("no encryption key configured; use -r, [recipients], or an age identity")
+		if len(k.base) != 0 {
+			k.source, k.external = "git config age.recipient", true
+			break
+		}
+		k.base, k.toIdentities = k.own, true
 	}
 	return k, nil
+}
+
+// describe says what the base recipients are, for messages.
+func (k keys) describe() string {
+	if k.toIdentities {
+		return k.identitySet.describe()
+	}
+	return k.source
+}
+
+// displayPath is path relative to directory when inside it, with forward slashes.
+func displayPath(directory, path string) string {
+	if relative, err := filepath.Rel(directory, path); err == nil && inside(directory, path) {
+		path = relative
+	}
+	return filepath.ToSlash(path)
 }
 
 // fileTarget describes the recipients of one protected file.
 type fileTarget struct {
 	values     []string
+	listed     []string // values without the user's own recipients added for toIdentities.
 	rules      []string // Rule files that apply to the file.
+	source     string   // What the file is encrypted to, for messages.
 	recipients []age.Recipient
 }
 
+// target finds the recipients of path and parses them.
 func (k keys) target(root, path string, ruleContents map[string][]byte) (fileTarget, error) {
-	target := fileTarget{values: append([]string(nil), k.base...)}
+	target, err := k.describeTarget(root, path, ruleContents)
+	if err != nil {
+		return target, err
+	}
+	target.recipients, err = parseRecipients(target.values)
+	return target, err
+}
+
+// describeTarget is target without parsing the recipients.
+func (k keys) describeTarget(root, path string, ruleContents map[string][]byte) (fileTarget, error) {
+	target := fileTarget{values: append([]string(nil), k.base...), source: k.describe()}
+	var nested []string
 	for _, parent := range ancestorDirs(root, filepath.Dir(path)) {
 		rule := filepath.Join(parent, ".gitage")
 		target.rules = append(target.rules, rule)
@@ -179,12 +229,67 @@ func (k keys) target(root, path string, ruleContents map[string][]byte) (fileTar
 			if err != nil {
 				return target, err
 			}
-			target.values = append(target.values, extra...)
+			if len(extra) != 0 {
+				target.values = append(target.values, extra...)
+				relative, _ := filepath.Rel(root, rule)
+				nested = append([]string{filepath.ToSlash(relative) + " [recipients]"}, nested...)
+			}
 		}
 	}
-	var err error
-	target.recipients, err = parseRecipients(target.values)
-	return target, err
+	target.listed = target.values
+	if k.toIdentities {
+		target.listed = target.values[len(k.base):]
+	}
+	if len(nested) != 0 {
+		target.source += " + " + strings.Join(nested, " + ")
+	}
+	return target, nil
+}
+
+// encryptedToUser reports whether target encrypts to one of the user's
+// identities, assuming so when that cannot be told. Without a base list, a
+// file is also encrypted to whoever locked it, which counts as the user
+// unless the user is listed elsewhere and so has partial access.
+func (k keys) encryptedToUser(target fileTarget) (bool, error) {
+	if len(k.own) == 0 || containsRecipient(target.listed, k.own) {
+		return true, nil
+	}
+	if len(target.listed) != 0 && !k.toIdentities {
+		return false, nil
+	}
+	listed, err := k.listedRecipients()
+	return !containsRecipient(listed, k.own), err
+}
+
+// listedRecipients reads every [recipients] list in the repository once.
+func (k keys) listedRecipients() ([]string, error) {
+	if *k.listed != nil {
+		return *k.listed, nil
+	}
+	rules := k.rules
+	if rules == nil {
+		gitRoot, err := gitRoot(k.root)
+		if err != nil {
+			return nil, err
+		}
+		paths, err := regularFiles(k.root, gitRoot != "")
+		if err != nil {
+			return nil, err
+		}
+		if rules, err = readRules(paths); err != nil {
+			return nil, err
+		}
+	}
+	listed := []string{}
+	for path, content := range rules {
+		_, recipients, err := parseRules(path, content)
+		if err != nil {
+			return nil, err
+		}
+		listed = append(listed, recipients...)
+	}
+	*k.listed = listed
+	return listed, nil
 }
 
 // encrypt reuses unchanged ciphertext from Git when reuse is allowed.

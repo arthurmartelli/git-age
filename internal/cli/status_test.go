@@ -9,6 +9,10 @@ import (
 )
 
 func TestStatus(t *testing.T) {
+	// The user's identity would mark files not encrypted to it.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AGE_KEY_FILE", "")
 	for _, inGit := range []bool{false, true} {
 		name := "outside Git"
 		if inGit {
@@ -158,5 +162,57 @@ func TestStatusReadOnly(t *testing.T) {
 		if after[path] != content {
 			t.Errorf("status changed %s", path)
 		}
+	}
+}
+
+// Carol is listed only in prod/.gitage, so app.env is not encrypted to her.
+func TestStatusAndUnlockWithoutAccess(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	alice, carol := newIdentity(t), newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+alice.Recipient().String()+"\n")
+	writeFile(t, directory, "prod/.gitage", "[recipients]\n"+carol.Recipient().String()+"\n")
+	writeFile(t, directory, "app.env", string(encryptFixture(t, alice.Recipient(), "app", false)))
+	writeFile(t, directory, "prod/db.env", string(encryptFixture(t, carol.Recipient(), "db", false)))
+	key := filepath.Join(t.TempDir(), "carol")
+	writeFile(t, filepath.Dir(key), "carol", carol.String()+"\n")
+	t.Setenv("GIT_AGE_KEY_FILE", key)
+
+	if got, err := runCommand(directory, "status", "--porcelain"); err != nil || got != "LN app.env\nL. prod/db.env\n" {
+		t.Fatalf("porcelain: %q, %v", got, err)
+	}
+	if got, err := runCommand(directory, "status"); err != nil || !strings.Contains(got, "LOCKED     app.env (no access)\n") {
+		t.Fatalf("status: %q, %v", got, err)
+	}
+	if got, err := runCommand(directory, "-v", "status"); err != nil || !strings.Contains(got, "encrypted to .gitage [recipients] + prod/.gitage [recipients]\n") {
+		t.Fatalf("status -v: %q, %v", got, err)
+	}
+	output, err := runCommand(directory, "unlock")
+	if err != nil || !strings.Contains(output, "left 1 file(s) locked that are not encrypted to you") {
+		t.Fatalf("unlock: %q, %v", output, err)
+	}
+	if string(readFile(t, directory, "prod/db.env")) != "db" || !strings.HasPrefix(string(readFile(t, directory, "app.env")), "age-encryption.org/v1\n") {
+		t.Fatal("unlock decrypted the wrong files")
+	}
+}
+
+func TestStatusStaleRecipients(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	alice, carol := newIdentity(t), newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+alice.Recipient().String()+"\n")
+	writeFile(t, directory, "secret.env", string(encryptFixture(t, alice.Recipient(), "secret", false)))
+	runGit(t, directory, "add", "-A")
+	runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "secrets")
+	if got, err := runCommand(directory, "status", "--porcelain"); err != nil || got != "L. secret.env\n" {
+		t.Fatalf("before the change: %q, %v", got, err)
+	}
+
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+alice.Recipient().String()+"\n"+carol.Recipient().String()+"\n")
+	if got, err := runCommand(directory, "status", "--porcelain"); err != nil || got != "LS secret.env\n" {
+		t.Fatalf("porcelain: %q, %v", got, err)
+	}
+	if got, err := runCommand(directory, "status"); err != nil || !strings.Contains(got, "previous [recipients] list (run `git-age rekey`):\n  secret.env\n") {
+		t.Fatalf("status: %q, %v", got, err)
 	}
 }

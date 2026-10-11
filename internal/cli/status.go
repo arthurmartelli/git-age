@@ -20,31 +20,61 @@ func newStatusCommand(options *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			statuses, target, err := repository.Statuses(options.directory, files)
+			if err != nil {
+				return err
+			}
 
-			for _, file := range files {
-				var line string
-				if porcelain || nullTerminated {
+			porcelain = porcelain || nullTerminated
+			var output strings.Builder
+			var stale []string
+			for i, file := range files {
+				status := statuses[i]
+				if status.Stale {
+					stale = append(stale, file.Path)
+				}
+				if porcelain {
 					path, terminator := file.Path, "\n"
 					if nullTerminated {
 						terminator = "\x00"
 					} else {
 						path = quoteStatusPath(path)
 					}
-					line = fmt.Sprintf("%s. %s%s", file.State[:1], path, terminator)
+					state, flag := string(file.State[:1]), "."
 					if file.State == repository.Unknown {
-						line = "?" + line[1:]
+						state = "?"
 					}
-				} else {
-					line = fmt.Sprintf("%-10s %s\n", file.State, file.Path)
-					if options.verbose {
-						line += fmt.Sprintf("           matched %s:%d: %s\n", file.RuleFile, file.RuleLine, file.Pattern)
+					if status.Stale {
+						flag = "S"
+					} else if status.NoAccess {
+						flag = "N"
 					}
+					fmt.Fprintf(&output, "%s%s %s%s", state, flag, path, terminator)
+					continue
 				}
-				if _, err := fmt.Fprint(cmd.OutOrStdout(), line); err != nil {
-					return err
+				note := ""
+				if status.NoAccess {
+					note = " (no access)"
+				}
+				fmt.Fprintf(&output, "%-10s %s%s\n", file.State, file.Path, note)
+				if options.verbose {
+					fmt.Fprintf(&output, "           matched %s:%d: %s\n", file.RuleFile, file.RuleLine, file.Pattern)
+					fmt.Fprintf(&output, "           encrypted to %s\n", status.Target)
 				}
 			}
-			return nil
+			if !porcelain && options.verbose {
+				fmt.Fprintf(&output, "encrypting to: %s\n", target)
+			}
+			if _, err := fmt.Fprint(cmd.OutOrStdout(), output.String()); err != nil || porcelain || len(stale) == 0 {
+				return err
+			}
+			var warning strings.Builder
+			warning.WriteString("\ngit-age: these files are still encrypted to a previous [recipients] list (run `git-age rekey`):\n")
+			for _, path := range stale {
+				fmt.Fprintf(&warning, "  %s\n", quoteStatusPath(path))
+			}
+			_, err = fmt.Fprint(cmd.ErrOrStderr(), warning.String())
+			return err
 		},
 	}
 	status.Flags().BoolVar(&porcelain, "porcelain", false, "stable machine-readable output")

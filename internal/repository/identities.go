@@ -36,7 +36,25 @@ func configValues(directory, key string, flags ...string) ([]string, error) {
 
 var errNoIdentity = errors.New("no identity configured; use -i or generate a key with git-age keygen")
 
-func loadIdentities(directory, root string, paths []string) ([]age.Identity, []string, error) {
+// identitySet holds the user's identities and the recipients they decrypt for.
+type identitySet struct {
+	identities []age.Identity
+	own        []string
+	paths      []string
+}
+
+// describe names the identity files, for messages.
+func (s identitySet) describe() string {
+	switch len(s.paths) {
+	case 0:
+		return "no identity"
+	case 1:
+		return "identity " + s.paths[0]
+	}
+	return "identities " + strings.Join(s.paths, ", ")
+}
+
+func loadIdentities(directory, root string, paths []string) (identitySet, error) {
 	if len(paths) == 0 {
 		paths = filepath.SplitList(os.Getenv("GIT_AGE_KEY_FILE"))
 	}
@@ -44,7 +62,7 @@ func loadIdentities(directory, root string, paths []string) ([]age.Identity, []s
 		var err error
 		paths, err = configValues(directory, "age.keyFile", "--path")
 		if err != nil {
-			return nil, nil, err
+			return identitySet{}, err
 		}
 	}
 	if len(paths) == 0 {
@@ -53,19 +71,18 @@ func loadIdentities(directory, root string, paths []string) ([]age.Identity, []s
 			paths = []string{path}
 		}
 	}
-	var identities []age.Identity
-	var recipients []string
+	var set identitySet
 	for _, path := range paths {
 		path = absolutePath(directory, path)
 		content, err := os.ReadFile(path)
 		if err != nil {
-			return nil, nil, err
+			return identitySet{}, err
 		}
 		if contentState(content) == Locked || bytes.HasPrefix(content, []byte("-----BEGIN AGE ENCRYPTED FILE-----")) {
-			return nil, nil, fmt.Errorf("%s: encrypted age identity files are not supported; use an unencrypted identity file", path)
+			return identitySet{}, fmt.Errorf("%s: encrypted age identity files are not supported; use an unencrypted identity file", path)
 		}
 		if bytes.HasPrefix(content, []byte("-----BEGIN ENCRYPTED PRIVATE KEY-----")) {
-			return nil, nil, fmt.Errorf("%s: passphrase-protected private keys are not supported; use an unencrypted identity file", path)
+			return identitySet{}, fmt.Errorf("%s: passphrase-protected private keys are not supported; use an unencrypted identity file", path)
 		}
 		var parsed []age.Identity
 		if bytes.HasPrefix(content, []byte("-----BEGIN")) {
@@ -73,29 +90,30 @@ func loadIdentities(directory, root string, paths []string) ([]age.Identity, []s
 			if err != nil {
 				var protected *ssh.PassphraseMissingError
 				if errors.As(err, &protected) {
-					return nil, nil, fmt.Errorf("%s: passphrase-protected SSH identities are not supported; use an unencrypted identity file", path)
+					return identitySet{}, fmt.Errorf("%s: passphrase-protected SSH identities are not supported; use an unencrypted identity file", path)
 				}
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
+				return identitySet{}, fmt.Errorf("%s: %w", path, err)
 			}
 			parsed = []age.Identity{identity}
 			signer, err := ssh.ParsePrivateKey(content)
 			if err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
+				return identitySet{}, fmt.Errorf("%s: %w", path, err)
 			}
-			recipients = append(recipients, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
+			set.own = append(set.own, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
 		} else {
 			parsed, err = age.ParseIdentities(bytes.NewReader(content))
 			if err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", path, err)
+				return identitySet{}, fmt.Errorf("%s: %w", path, err)
 			}
 		}
 		for _, identity := range parsed {
 			switch identity := identity.(type) {
 			case *age.X25519Identity:
-				recipients = append(recipients, identity.Recipient().String())
+				set.own = append(set.own, identity.Recipient().String())
 			}
 		}
-		identities = append(identities, parsed...)
+		set.identities = append(set.identities, parsed...)
+		set.paths = append(set.paths, path)
 	}
-	return identities, recipients, nil
+	return set, nil
 }
