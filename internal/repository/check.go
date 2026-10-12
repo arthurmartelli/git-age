@@ -23,7 +23,7 @@ type IndexCheck struct {
 
 func CheckIndex(directory string, paths []string) (IndexCheck, error) {
 	result, err := checkIndex(directory, true)
-	if err != nil || len(paths) == 0 {
+	if err != nil {
 		return result, err
 	}
 	directory, err = filepath.Abs(directory)
@@ -46,6 +46,9 @@ func CheckIndex(directory string, paths []string) (IndexCheck, error) {
 		if stalePaths[previous] {
 			result.StaleFiles = append(result.StaleFiles, file.Path)
 		}
+	}
+	if len(paths) == 0 {
+		return result, nil
 	}
 	result.Files, err = selectFiles(directory, result.Files, paths)
 	selected := map[string]bool{}

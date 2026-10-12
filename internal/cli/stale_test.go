@@ -72,9 +72,19 @@ func TestStagedStaleSelectionFromSubdirectory(t *testing.T) {
 	runGit(t, directory, "commit", "-qm", "nested secrets")
 	writeFile(t, directory, "sub/.gitage", "[recipients]\n"+identity.Recipient().String()+"\n"+newIdentity(t).Recipient().String()+"\n")
 	runGit(t, directory, "add", "sub/.gitage")
-	code, _, stderr := runCheck(filepath.Join(directory, "sub"), "--staged", "./a.env")
+	code, _, stderr := runCheck(filepath.Join(directory, "sub"), "--staged")
+	if code != 1 || !strings.Contains(stderr, "git-age rekey -- a.env b.env") || !strings.Contains(stderr, "git add -- a.env b.env") {
+		t.Fatalf("unscoped stale advice from subdirectory: exit %d, stderr %q", code, stderr)
+	}
+	code, _, stderr = runCheck(filepath.Join(directory, "sub"), "--staged", "./a.env")
 	if code != 1 || !strings.Contains(stderr, "  a.env\n") || strings.Contains(stderr, "b.env") || strings.Contains(stderr, "secret.env") {
 		t.Fatalf("stale selection: exit %d, stderr %q", code, stderr)
+	}
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n"+newIdentity(t).Recipient().String()+"\n")
+	runGit(t, directory, "add", ".gitage")
+	code, _, stderr = runCheck(filepath.Join(directory, "sub"), "--staged")
+	if code != 1 || !strings.Contains(stderr, "git-age rekey -- ../secret.env a.env b.env") || !strings.Contains(stderr, "git add -- ../secret.env a.env b.env") {
+		t.Fatalf("root-level stale advice from subdirectory: exit %d, stderr %q", code, stderr)
 	}
 }
 

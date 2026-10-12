@@ -71,14 +71,20 @@ func TestInvalidSafetyOverridesChangeNothing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			isolateHookEnvironment(t)
 			directory, _, _ := cleanFixture(t, []byte("original\n"), false)
+			mustCommand(t, directory, "install", "--no-filter")
+			writeFile(t, directory, ".gitage", string(readFile(t, directory, ".gitage"))+"# changed rules\n")
 			writeFile(t, directory, "secret.env", "changed\n")
+			writeFile(t, directory, "sub/.gitage", "[files]\n*.secret\n")
+			runGit(t, directory, "add", ".gitage", "secret.env", "sub/.gitage")
 			t.Setenv(name, "maybe")
 			before := installSnapshot(t, directory)
-			var stdout, stderr bytes.Buffer
-			if code := Run([]string{"-C", directory, "lock"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), name) || !strings.Contains(stderr.String(), "maybe") {
-				t.Fatalf("invalid override: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
+			for _, args := range [][]string{{"lock"}, {"hook", "pre-commit"}, {"hook", "post-commit"}, {"hook", "pre-push", "origin", "example.invalid"}} {
+				var stdout, stderr bytes.Buffer
+				if code := Run(append([]string{"-C", directory}, args...), &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), name) || !strings.Contains(stderr.String(), "maybe") {
+					t.Fatalf("invalid override %v: exit %d, stdout %q, stderr %q", args, code, &stdout, &stderr)
+				}
+				assertSnapshotUnchanged(t, directory, before)
 			}
-			assertSnapshotUnchanged(t, directory, before)
 		})
 	}
 }

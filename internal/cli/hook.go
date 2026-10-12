@@ -22,6 +22,9 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error { return nil },
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateSafetyOverrides(); err != nil {
+				return err
+			}
 			if !options.dryRun && cmd.Name() != "pre-push" {
 				return refreshGitAttributes(cmd, options.directory)
 			}
