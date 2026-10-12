@@ -54,6 +54,9 @@ func TestPrePushGitHook(t *testing.T) {
 		if err == nil || !bytes.Contains(output, []byte(message)) || !bytes.Contains(output, []byte("push aborted")) {
 			t.Fatalf("push %s: %v, %s", refspec, err, output)
 		}
+		if !bytes.Contains(output, []byte("GIT_AGE_ALLOW_PLAINTEXT_PUSH=1 git push")) {
+			t.Fatalf("push refusal omitted override advice: %s", output)
+		}
 	}
 	writeFile(t, directory, "secret.env", "leaked\n")
 	runGit(t, directory, "add", "secret.env")

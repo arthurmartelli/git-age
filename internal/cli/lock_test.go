@@ -63,6 +63,90 @@ func TestLock(t *testing.T) {
 	}
 }
 
+func TestLockExplicitIdentityOutsideGit(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AGE_RECIPIENT", "")
+	t.Setenv("GIT_AGE_KEY_FILE", "")
+	directory := t.TempDir()
+	identity, defaultIdentity := newIdentity(t), newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	writeFile(t, directory, ".gitage.key", defaultIdentity.String()+"\n")
+	writeFile(t, directory, "chosen.key", identity.String()+"\n")
+	plaintext := "secret\x00bytes\n"
+	writeFile(t, directory, "secret.env", plaintext)
+	writeFile(t, directory, "other.env", "unselected\n")
+
+	output := mustCommand(t, directory, "lock", "-i", "chosen.key", "secret.env")
+	if output != "git-age: Locked 1 file.\n" {
+		t.Fatalf("lock summary: %q", output)
+	}
+	ciphertext := readFile(t, directory, "secret.env")
+	assertDecrypts(t, ciphertext, identity, []byte(plaintext))
+	assertCannotDecrypt(t, ciphertext, defaultIdentity)
+	if string(readFile(t, directory, "other.env")) != "unselected\n" {
+		t.Fatal("lock changed an unselected file")
+	}
+	mustCommand(t, directory, "unlock", "-i", "chosen.key", "secret.env")
+	if string(readFile(t, directory, "secret.env")) != plaintext {
+		t.Fatal("explicit identity did not unlock the file")
+	}
+	if _, err := os.Stat(filepath.Join(directory, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("lock or unlock created a Git repository: %v", err)
+	}
+}
+
+func TestDotPathsFromSubdirectory(t *testing.T) {
+	for _, useCwd := range []bool{false, true} {
+		name := "directory flag"
+		if useCwd {
+			name = "working directory"
+		}
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			initKeygenRepo(t, directory)
+			isolateHookEnvironment(t)
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+			writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+			for _, path := range []string{"secret.env", "sub/secret.env", "sub/other.env", "sub/nested/deep.env"} {
+				writeFile(t, directory, path, path+"\n")
+			}
+			base := filepath.Join(directory, "sub")
+			if useCwd {
+				t.Chdir(base)
+				base = "."
+			}
+
+			if output := mustCommand(t, base, "status", "--porcelain", "./secret.env"); output != "U. secret.env\n" {
+				t.Fatalf("selected status: %q", output)
+			}
+			mustCommand(t, base, "lock", "./secret.env")
+			assertDecrypts(t, readFile(t, directory, "sub/secret.env"), identity, []byte("sub/secret.env\n"))
+			if code, output, stderr := runCheck(base, "./secret.env"); code != 0 || output != "" || stderr != "" {
+				t.Fatalf("selected check: exit %d, output %q, stderr %q", code, output, stderr)
+			}
+			runGit(t, directory, "add", ".gitage", "sub/secret.env")
+			if code, output, stderr := runCheck(base, "--staged", "./secret.env"); code != 0 || output != "" || stderr != "" {
+				t.Fatalf("selected staged check: exit %d, output %q, stderr %q", code, output, stderr)
+			}
+			mustCommand(t, base, "unlock", "./secret.env")
+			if string(readFile(t, directory, "sub/secret.env")) != "sub/secret.env\n" {
+				t.Fatal("unlock did not select the subdirectory file")
+			}
+			mustCommand(t, base, "rekey", "./secret.env")
+			assertDecrypts(t, readFile(t, directory, "sub/secret.env"), identity, []byte("sub/secret.env\n"))
+			mustCommand(t, base, "lock", "./nested")
+			assertDecrypts(t, readFile(t, directory, "sub/nested/deep.env"), identity, []byte("sub/nested/deep.env\n"))
+			for _, path := range []string{"secret.env", "sub/other.env"} {
+				if string(readFile(t, directory, path)) != path+"\n" {
+					t.Fatalf("changed unselected file %s", path)
+				}
+			}
+		})
+	}
+}
+
 func TestLockDryRunAndSummaries(t *testing.T) {
 	directory := t.TempDir()
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)

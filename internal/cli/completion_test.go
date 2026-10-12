@@ -282,6 +282,9 @@ func TestCompletionCommands(t *testing.T) {
 		if code := Run(append([]string{"completion"}, args...), &output, &stderr); code != 2 || output.Len() != 0 {
 			t.Errorf("args %v: exit %d, output %q, stderr %q", args, code, &output, &stderr)
 		}
+		if len(args) == 1 && stderr.String() != "git-age: unknown shell \"tcsh\"; supported shells: bash, zsh, fish\n" {
+			t.Errorf("unknown shell diagnostic: %q", &stderr)
+		}
 	}
 }
 

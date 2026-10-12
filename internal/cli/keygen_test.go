@@ -197,6 +197,9 @@ func initKeygenRepo(t *testing.T, directory string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, output)
 	}
+	// Background maintenance can remove lock files while snapshot tests walk .git.
+	runGit(t, directory, "config", "maintenance.auto", "false")
+	runGit(t, directory, "config", "gc.auto", "0")
 }
 
 func TestKeygenKeepsExistingExclusion(t *testing.T) {

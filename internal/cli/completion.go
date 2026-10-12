@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"path/filepath"
 	"slices"
@@ -64,7 +65,7 @@ func newCompletionCommand() *cobra.Command {
 		Use:       "completion SHELL",
 		ValidArgs: []string{"bash", "zsh", "fish"},
 		Short:     "print the shell completion script for bash, zsh or fish",
-		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		Args:      cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			root := cmd.Root()
 			out := cmd.OutOrStdout()
@@ -83,6 +84,8 @@ func newCompletionCommand() *cobra.Command {
 			case "fish":
 				err = root.GenFishCompletion(out, true)
 				suffix = fishCompletion
+			default:
+				return fmt.Errorf("unknown shell %q; supported shells: bash, zsh, fish", args[0])
 			}
 			if err != nil {
 				return err
