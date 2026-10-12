@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -127,15 +128,20 @@ func TestHistoryPurgeLiteralPathsAndEmptyTree(t *testing.T) {
 				directory = t.TempDir()
 				runGit(t, directory, "init", "-q", "--object-format=sha256", "--initial-branch=master")
 			}
-			writeFile(t, directory, "[secret]*", "literal name\n")
+			// Both names also match "secret-other" as globs. Windows forbids '*'.
+			literal := "[secret]*"
+			if runtime.GOOS == "windows" {
+				literal = "[s]ecret-other"
+			}
+			writeFile(t, directory, literal, "literal name\n")
 			writeFile(t, directory, "secret-other", "keep\n")
 			writeFile(t, directory, "-secret", "leading dash\n")
 			runGit(t, directory, "add", ".")
 			runGit(t, directory, "commit", "-qm", "literal paths")
 			runGit(t, directory, "checkout", "-q", "--detach")
 			runGit(t, directory, "branch", "-D", "master")
-			mustCommand(t, directory, "history", "purge", "--yes", "--", "[secret]*", "-secret")
-			assertHistoryPathsAbsent(t, directory, "[secret]*", "-secret")
+			mustCommand(t, directory, "history", "purge", "--yes", "--", literal, "-secret")
+			assertHistoryPathsAbsent(t, directory, literal, "-secret")
 			if string(readFile(t, directory, "secret-other")) != "keep\n" {
 				t.Fatal("literal path treated as a glob")
 			}

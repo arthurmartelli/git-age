@@ -406,6 +406,14 @@ func TestCheckPaths(t *testing.T) {
 	if code, _, stderr := runCheck(relative, "--staged", "good.env"); code != 0 {
 		t.Fatalf("relative -C: exit %d, %s", code, stderr)
 	}
+	// macOS temp directories sit behind /var -> /private/var.
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(directory, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if code, _, stderr := runCheck(link, "--staged", "good.env"); code != 0 {
+		t.Fatalf("symlinked -C: exit %d, %s", code, stderr)
+	}
 }
 
 func TestCheckStagedPathsKeepSafetyChecks(t *testing.T) {

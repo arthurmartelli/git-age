@@ -26,7 +26,12 @@ func CheckIndex(directory string, paths []string) (IndexCheck, error) {
 	if err != nil {
 		return result, err
 	}
+	// The Git root has symlinks resolved, so the directory must too.
 	directory, err = filepath.Abs(directory)
+	if err != nil {
+		return result, err
+	}
+	directory, err = filepath.EvalSymlinks(directory)
 	if err != nil {
 		return result, err
 	}
