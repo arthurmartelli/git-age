@@ -1,9 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	_ "embed"
 	"fmt"
-	"io"
 	"regexp"
 	"slices"
 	"strings"
@@ -53,12 +53,10 @@ func newHelpCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				_, err := io.WriteString(cmd.OutOrStdout(), manual)
-				return err
+				return writeHelp(cmd, manual)
 			}
 			if section, ok := sections[args[0]]; len(args) == 1 && ok {
-				_, err := io.WriteString(cmd.OutOrStdout(), section)
-				return err
+				return writeHelp(cmd, section)
 			}
 
 			root := cmd.Root()
@@ -68,7 +66,15 @@ func newHelpCommand() *cobra.Command {
 			}
 
 			topic.InitDefaultHelpFlag()
-			return topic.Help()
+			var output bytes.Buffer
+			previous := topic.OutOrStdout()
+			topic.SetOut(&output)
+			err = topic.Help()
+			topic.SetOut(previous)
+			if err != nil {
+				return err
+			}
+			return writeHelp(cmd, output.String())
 		},
 	}
 }

@@ -2,11 +2,30 @@ package cli
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+func TestHelpDoesNotPageRedirectedOutput(t *testing.T) {
+	t.Setenv("GIT_PAGER", "exit 99")
+	t.Setenv("PAGER", "exit 98")
+	output, err := os.CreateTemp(t.TempDir(), "help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	var stderr bytes.Buffer
+	if code := Run([]string{"help"}, output, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("redirected help: exit %d, stderr %q", code, &stderr)
+	}
+	content, err := os.ReadFile(output.Name())
+	if err != nil || string(content) != manual {
+		t.Fatalf("redirected help differs from manual: %v", err)
+	}
+}
 
 func TestBareCommandHelp(t *testing.T) {
 	for _, command := range [][]string{nil, {"history"}} {

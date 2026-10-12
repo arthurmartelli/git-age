@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/arthurmartelli/git-age/internal/repository"
@@ -47,19 +45,11 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("find editor: %w", err)
 				}
-				shell, err := exec.LookPath("sh")
-				if err != nil && runtime.GOOS == "windows" {
-					// Git for Windows includes sh even when only git.exe is on PATH.
-					gitPath, gitErr := exec.Command("git", "--exec-path").Output()
-					if gitErr != nil {
-						return gitErr
-					}
-					shell = filepath.Join(strings.TrimSpace(string(gitPath)), "..", "..", "..", "usr", "bin", "sh.exe")
-				} else if err != nil {
+				shell, err := gitShell()
+				if err != nil {
 					return err
 				}
-				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-				defer stop()
+				ctx := cmd.Context()
 				command := exec.CommandContext(ctx, shell, "-c", strings.TrimSpace(string(editor))+` "$@"`, "git-age-edit", path)
 				command.Dir = options.directory
 				command.Stdin = cmd.InOrStdin()

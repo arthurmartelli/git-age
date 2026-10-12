@@ -157,6 +157,11 @@ COMMANDS
         Show this manual, one section, or a command's options.
         For example: `git-age help history rekey`.
 
+        On a terminal, use GIT_PAGER, then PAGER, then `less -FRX`.
+        An empty pager setting or `cat` disables paging. Output to a
+        pipe or file is printed directly. If neither variable is set and
+        less is missing, help is printed directly.
+
 
 Global options:
 
@@ -164,6 +169,9 @@ Global options:
     -n          dry run
     -v          verbose
     --version   print version
+
+Ctrl-C stops the command, prints `git-age: interrupted` to stderr and
+exits with status 130.
 
 
 PATHS

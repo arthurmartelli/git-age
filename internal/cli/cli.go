@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 
 	"github.com/spf13/cobra"
 )
@@ -20,7 +23,29 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	root.SetErr(stderr)
 	root.SetArgs(args)
 
-	if err := root.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	// Editing a locked file creates a plaintext copy that must be wiped before
+	// main exits. Other commands retain the immediate exit behavior of SIGINT.
+	command, _, _ := root.Find(args)
+	waitForCleanup := command != nil && command.Name() == "edit"
+	result := make(chan error, 1)
+	go func() { result <- root.ExecuteContext(ctx) }()
+	var err error
+	select {
+	case err = <-result:
+	case <-ctx.Done():
+		// A second Ctrl-C can force an exit while the editor cleans up.
+		stop()
+		if waitForCleanup {
+			<-result
+		}
+	}
+	if ctx.Err() != nil {
+		fmt.Fprintln(stderr, "git-age: interrupted")
+		return 130
+	}
+	if err != nil {
 		if errors.Is(err, errCheckFailed) || errors.Is(err, errMergeConflict) {
 			return 1
 		}
