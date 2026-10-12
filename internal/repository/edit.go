@@ -59,7 +59,7 @@ func wipePlaintextCopy(path string) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("cannot overwrite plaintext copy: %s", path)
 	}
-	// ponytail: one overwrite cannot erase snapshots, SSD remnants or editor backups.
+	// one overwrite cannot erase snapshots, SSD remnants or editor backups.
 	if err := writeExisting(path, make([]byte, info.Size())); err != nil {
 		return fmt.Errorf("overwrite plaintext copy: %w", err)
 	}

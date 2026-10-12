@@ -77,39 +77,39 @@ COMMANDS
         Decrypt protected files.
 
     rekey [PATH...]
-	Encrypt protected plaintext and freshly re-encrypt locked files
-	for the current recipients. Existing ciphertext is never reused.
+        Encrypt protected plaintext and freshly re-encrypt locked files
+        for the current recipients. Existing ciphertext is never reused.
 
-	Decrypted contents stay in memory. Files outside your configured
-	access are skipped with a warning. Other decryption failures
-	abort the operation before any file is changed.
+        Decrypted contents stay in memory. Files outside your configured
+        access are skipped with a warning. Other decryption failures
+        abort the operation before any file is changed.
 
     edit FILE
         Edit a protected file in your editor. A locked file is decrypted
         to a private temporary file and encrypted again after saving.
 
-	Uses Git's editor selection: GIT_EDITOR, core.editor, VISUAL,
-	EDITOR, then Git's default. Unlocked files are edited in place.
-	Unchanged contents keep the original ciphertext. Editor failures
-	leave a locked original unchanged.
+        Uses Git's editor selection: GIT_EDITOR, core.editor, VISUAL,
+        EDITOR, then Git's default. Unlocked files are edited in place.
+        Unchanged contents keep the original ciphertext. Editor failures
+        leave a locked original unchanged.
 
-	The temporary copy is overwritten once before removal. This is
-	best-effort cleanup, not guaranteed erasure from SSDs, snapshots,
-	or copies made by the editor. Forced termination can leave the
-	temporary copy behind.
+        The temporary copy is overwritten once before removal. This is
+        best-effort cleanup, not guaranteed erasure from SSDs, snapshots,
+        or copies made by the editor. Forced termination can leave the
+        temporary copy behind.
 
     check [PATH...]
-	Fail if a selected protected file is unlocked.
+        Fail if a selected protected file is unlocked.
 
-	`--staged` checks the index contents using the staged `.gitage`
-	rules, including selected files unchanged since the last commit.
-	Private-key and removed-rule checks still cover all staged changes.
+        `--staged` checks the index contents using the staged `.gitage`
+        rules, including selected files unchanged since the last commit.
+        Private-key and removed-rule checks still cover all staged changes.
 
     install
         Install Git hooks, readable diffs, clean-status support and the
         merge driver.
-	`--hook-mode` selects the pre-commit policy: interactive,
-	always-lock, or abort.
+        `--hook-mode` selects the pre-commit policy: interactive,
+        always-lock, or abort.
 
     uninstall
         Remove the Git integration installed by git-age.
@@ -122,40 +122,40 @@ COMMANDS
     trust
         Trust the current `[recipients]` lists.
 
-	`--show` displays the current recipients, trust status and changes
-	since approval without approving anything.
-	`--hash` prints only the current recipient-list hash for scripts.
+        `--show` displays the current recipients, trust status and changes
+        since approval without approving anything.
+        `--hash` prints only the current recipient-list hash for scripts.
 
     history
-	Inspect or rewrite protected files in Git history.
+        Inspect or rewrite protected files in Git history.
 
     history audit [REV...]
-	Search Git history for protected files committed as plaintext
-	or for committed private keys.
+        Search Git history for protected files committed as plaintext
+        or for committed private keys.
 
-	With no revisions, search all refs except history-rewrite backups.
-	`--reflog` also searches commits kept only by reflogs.
+        With no revisions, search all refs except history-rewrite backups.
+        `--reflog` also searches commits kept only by reflogs.
 
     history rekey
-	Rewrite local branches, tags and the stash to encrypt protected
-	files for the current recipients. Takes no paths or revisions.
+        Rewrite local branches, tags and the stash to encrypt protected
+        files for the current recipients. Takes no paths or revisions.
 
-	`--plaintext-only` keeps existing ciphertext.
-	`--keep-undecryptable` keeps versions you cannot decrypt.
-	`--yes` skips confirmation. Use `--dry-run` to preview changes.
+        `--plaintext-only` keeps existing ciphertext.
+        `--keep-undecryptable` keeps versions you cannot decrypt.
+        `--yes` skips confirmation. Use `--dry-run` to preview changes.
 
     history purge PATH ...
     history purge --all
-	Remove selected paths from local branches, tags and the stash.
-	`--all` removes every version of all protected files.
-	`--yes` skips confirmation. Use `--dry-run` to preview changes.
+        Remove selected paths from local branches, tags and the stash.
+        `--all` removes every version of all protected files.
+        `--yes` skips confirmation. Use `--dry-run` to preview changes.
 
     completion SHELL
-	Print completion for bash, zsh or fish.
+        Print completion for bash, zsh or fish.
 
     help [TOPIC|COMMAND...]
-	Show this manual, one section, or a command's options.
-	For example: `git-age help history rekey`.
+        Show this manual, one section, or a command's options.
+        For example: `git-age help history rekey`.
 
 
 Global options:
@@ -163,6 +163,7 @@ Global options:
     -C DIR      run in DIR
     -n          dry run
     -v          verbose
+    --version   print version
 
 
 PATHS
@@ -1039,12 +1040,10 @@ Regenerate shell completion after upgrading git-age.
 DEPENDENCIES
 ------------
 
-git-age requires:
+git-age is a single executable with age built in. Git is its only
+runtime dependency.
 
-* Python 3.9+
-* age
-* age-keygen
-* Git
+Building from source requires Go 1.25+.
 
 Outside a Git repository, `lock`, `unlock` and `status` still work, but
 existing Git ciphertext cannot be reused.
