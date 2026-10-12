@@ -85,7 +85,7 @@ func TestCheckUnknown(t *testing.T) {
 	}
 }
 
-func TestCheckCached(t *testing.T) {
+func TestCheckStaged(t *testing.T) {
 	for _, scenario := range []string{"staged plaintext", "staged encrypted", "staged rules", "unstaged rules", "nested negation", "unchanged plaintext", "ignored tracked file", "private key", "local key", "protected key", "allow private key", "case insensitive", "subdirectory", "missing working file", "symlink"} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
@@ -122,7 +122,6 @@ func TestCheckCached(t *testing.T) {
 				runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline")
 				writeFile(t, directory, "notes.txt", "new")
 				runGit(t, directory, "add", "notes.txt")
-				code, diagnostic = 0, ""
 			case "ignored tracked file":
 				writeFile(t, directory, ".gitignore", "secret.env\n")
 			case "private key", "local key", "protected key", "allow private key":
@@ -160,12 +159,12 @@ func TestCheckCached(t *testing.T) {
 				runGit(t, directory, "update-index", "--cacheinfo", "120000,"+oid+",secret.env")
 				code, diagnostic = 0, ""
 			}
-			got, output, stderr := runCheck(directory, "--cached")
+			got, output, stderr := runCheck(directory, "--staged")
 			if got != code || output != "" || !strings.Contains(stderr, diagnostic) || (code == 0 && stderr != "") {
 				t.Fatalf("exit %d, output %q, stderr %q; want %d, %q", got, output, stderr, code, diagnostic)
 			}
 			if code == 0 {
-				got, output, stderr = runCheck(directory, "--cached", "-v")
+				got, output, stderr = runCheck(directory, "--staged", "-v")
 				if got != 0 || output != "git-age: staged protected files are locked\n" || stderr != "" {
 					t.Fatalf("verbose: exit %d, output %q, stderr %q", got, output, stderr)
 				}
@@ -174,7 +173,7 @@ func TestCheckCached(t *testing.T) {
 	}
 }
 
-func TestCheckCachedRemovedRules(t *testing.T) {
+func TestCheckStagedRemovedRules(t *testing.T) {
 	for _, scenario := range []string{"removed", "moved", "allowed", "symlink", "last rule", "allow last rule"} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
@@ -198,7 +197,7 @@ func TestCheckCachedRemovedRules(t *testing.T) {
 			if scenario == "allowed" || scenario == "allow last rule" {
 				t.Setenv("GIT_AGE_ALLOW_REMOVE", "1")
 			}
-			code, output, stderr := runCheck(directory, "--cached")
+			code, output, stderr := runCheck(directory, "--staged")
 			if scenario == "allowed" {
 				if code != 0 || output != "" || stderr != "" {
 					t.Fatalf("exit %d, output %q, stderr %q", code, output, stderr)
@@ -222,7 +221,7 @@ func TestCommandsRequireWorktree(t *testing.T) {
 	}{
 		{"install", nil, "install"},
 		{"uninstall", nil, "uninstall"},
-		{"check", []string{"--cached"}, "check --cached"},
+		{"check", []string{"--staged"}, "check --staged"},
 		{"hook", []string{"pre-push", "origin", "url"}, "pre-push"},
 	} {
 		t.Run(test.want, func(t *testing.T) {
@@ -234,8 +233,8 @@ func TestCommandsRequireWorktree(t *testing.T) {
 	}
 }
 
-func TestCheckCachedErrors(t *testing.T) {
-	for _, scenario := range []string{"outside Git", "no staged rules", "malformed staged rules", "unmerged", "unexpected argument"} {
+func TestCheckStagedErrors(t *testing.T) {
+	for _, scenario := range []string{"outside Git", "no staged rules", "malformed staged rules", "unmerged", "missing path"} {
 		t.Run(scenario, func(t *testing.T) {
 			directory := t.TempDir()
 			var args []string
@@ -257,10 +256,10 @@ func TestCheckCachedErrors(t *testing.T) {
 					}
 				}
 			}
-			if scenario == "unexpected argument" {
+			if scenario == "missing path" {
 				args = []string{"secret.env"}
 			}
-			code, output, stderr := runCheck(directory, append([]string{"--cached"}, args...)...)
+			code, output, stderr := runCheck(directory, append([]string{"--staged"}, args...)...)
 			if code != 2 || output != "" || stderr == "" {
 				t.Fatalf("exit %d, output %q, stderr %q", code, output, stderr)
 			}
@@ -297,13 +296,110 @@ func TestCheckReadOnly(t *testing.T) {
 		return files
 	}
 	before := snapshot()
-	for _, args := range [][]string{nil, {"--cached"}, {"--cached", "-n"}} {
+	for _, args := range [][]string{nil, {"--staged"}, {"--staged", "-n"}} {
 		if code, _, stderr := runCheck(directory, args...); code != 1 {
 			t.Fatalf("exit %d, stderr %q", code, stderr)
 		}
 	}
 	if !reflect.DeepEqual(before, snapshot()) {
 		t.Fatal("check changed the repository")
+	}
+}
+
+func TestCheckPaths(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	identity := newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	for _, path := range []string{"good.env", "sub/good.env"} {
+		writeFile(t, directory, path, string(encryptFixture(t, identity.Recipient(), "secret", false)))
+	}
+	writeFile(t, directory, "bad.env", "plaintext")
+	writeFile(t, directory, "sub/bad.env", "plaintext")
+	writeFile(t, directory, "notes.txt", "public")
+	runGit(t, directory, "add", ".")
+	runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline")
+	for _, staged := range []bool{false, true} {
+		for _, test := range []struct {
+			path string
+			code int
+			want string
+		}{
+			{"good.env", 0, ""},
+			{"bad.env", 1, "  bad.env\n"},
+			{"sub", 1, "  sub/bad.env\n"},
+			{"missing.env", 2, "no such file or directory"},
+			{"notes.txt", 2, "not protected by .gitage"},
+			{"../outside.env", 2, "outside"},
+		} {
+			args := []string{test.path}
+			if staged {
+				args = append([]string{"--staged"}, args...)
+			}
+			code, output, stderr := runCheck(directory, args...)
+			if code != test.code || output != "" || !strings.Contains(stderr, test.want) || test.code == 0 && stderr != "" {
+				t.Fatalf("%v: exit %d, output %q, stderr %q", args, code, output, stderr)
+			}
+			if test.path == "bad.env" && strings.Contains(stderr, "sub/bad.env") {
+				t.Fatalf("selection included another path: %s", stderr)
+			}
+		}
+	}
+	// Explicit staged paths use index content even after working copies disappear.
+	if err := os.Remove(filepath.Join(directory, "sub/good.env")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, directory, ".gitage", "[files]\n*.txt\n")
+	for _, base := range []string{directory, filepath.Join(directory, "sub")} {
+		path := "sub/good.env"
+		if base != directory {
+			path = "good.env"
+		}
+		if code, _, stderr := runCheck(base, "--staged", path); code != 0 {
+			t.Fatalf("staged path from %s: exit %d, %s", base, code, stderr)
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := runCheck(relative, "--staged", "good.env"); code != 0 {
+		t.Fatalf("relative -C: exit %d, %s", code, stderr)
+	}
+}
+
+func TestCheckStagedPathsKeepSafetyChecks(t *testing.T) {
+	for _, scenario := range []string{"private key", "removed rule"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory := t.TempDir()
+			initKeygenRepo(t, directory)
+			t.Setenv("GIT_AGE_ALLOW_PRIVATE_KEYS", "")
+			t.Setenv("GIT_AGE_ALLOW_REMOVE", "")
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+			writeFile(t, directory, "sub/.gitage", "[files]\n*.env\n")
+			writeFile(t, directory, "good.env", string(encryptFixture(t, identity.Recipient(), "secret", false)))
+			runGit(t, directory, "add", ".")
+			runGit(t, directory, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "baseline")
+			want := "refusing to commit private age keys"
+			if scenario == "private key" {
+				writeFile(t, directory, "sub/leaked.key", identity.String()+"\n")
+				runGit(t, directory, "add", "sub/leaked.key")
+			} else {
+				runGit(t, directory, "rm", "sub/.gitage")
+				want = "refusing to commit the removal of .gitage"
+			}
+			before := installSnapshot(t, directory)
+			code, stdout, stderr := runCheck(directory, "--staged", "good.env")
+			if code != 1 || stdout != "" || !strings.Contains(stderr, want) {
+				t.Fatalf("exit %d, output %q, stderr %q", code, stdout, stderr)
+			}
+			assertSnapshotUnchanged(t, directory, before)
+		})
 	}
 }
 

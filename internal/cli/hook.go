@@ -52,7 +52,7 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 			}
 			if err == nil {
 				var skips repository.UnlockSkips
-				if skips, err = repository.Unlock(root, files, nil); err == nil {
+				if skips, err = repository.Unlock(root, files, nil, false); err == nil {
 					err = reportUnlockSkips(cmd, options, skips)
 				}
 			}

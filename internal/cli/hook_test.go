@@ -215,7 +215,7 @@ func TestHookGitCommit(t *testing.T) {
 				runGit(t, directory, "worktree", "add", "-qb", "linked", linked)
 				directory = linked
 			}
-			if _, err := runCommand(directory, "install", "--mode", "always-lock"); err != nil {
+			if _, err := runCommand(directory, "install", "--hook-mode", "always-lock"); err != nil {
 				t.Fatal(err)
 			}
 			if scenario == "post-commit unlock" {

@@ -35,7 +35,7 @@ func TestMalformedPatternsRefusedBeforeChanges(t *testing.T) {
 			writeFile(t, directory, "secret.env", "plaintext\n")
 			runGit(t, directory, "add", ".gitage", "secret.env")
 			before := installSnapshot(t, directory)
-			for _, args := range [][]string{{"status"}, {"lock"}, {"check", "--cached"}, {"install"}} {
+			for _, args := range [][]string{{"status"}, {"lock"}, {"check", "--staged"}, {"install"}} {
 				var stdout, stderr bytes.Buffer
 				code := Run(append([]string{"-C", directory}, args...), &stdout, &stderr)
 				if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), ".gitage:2: "+test.diagnostic) {
@@ -191,7 +191,7 @@ func TestLockWarnsForExcludedIdentity(t *testing.T) {
 			writeFile(t, directory, path, "secret\n")
 			var stdout, stderr bytes.Buffer
 			code := Run([]string{"-C", directory, "lock"}, &stdout, &stderr)
-			if code != 0 || stdout.Len() != 0 {
+			if code != 0 || stdout.String() != "git-age: Locked 1 file.\n" {
 				t.Fatalf("lock: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
 			}
 			if scenario == "excluded" {

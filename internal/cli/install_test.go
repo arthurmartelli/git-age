@@ -46,7 +46,7 @@ func TestInstall(t *testing.T) {
 				runGit(t, directory, "config", "core.hooksPath", hooks)
 			}
 			beforeIndex := runGit(t, directory, "ls-files", "--stage", "-z")
-			output, err := runCommand(workingDirectory, "install", "--mode", "always-lock", "--unlock-after-commit")
+			output, err := runCommand(workingDirectory, "install", "--hook-mode", "always-lock", "--unlock-after-commit")
 			if err != nil || !strings.Contains(output, "Installed git-age hooks:") {
 				t.Fatalf("install: %v, %s", err, output)
 			}
@@ -157,7 +157,7 @@ func TestInstallGitIntegration(t *testing.T) {
 	runGit(t, directory, "add", "secret.env")
 	runGit(t, directory, "commit", "-qm", "ours")
 	runGit(t, directory, "config", "diff.age.cachetextconv", "true")
-	output, err := exec.Command(executable, "-C", directory, "install", "--mode=always-lock").CombinedOutput()
+	output, err := exec.Command(executable, "-C", directory, "install", "--hook-mode=always-lock").CombinedOutput()
 	if err != nil {
 		t.Fatalf("install binary: %v, %s", err, output)
 	}
@@ -439,7 +439,7 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 			writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 			hooks := installGitPath(t, directory, "hooks")
 			attributes := installGitPath(t, directory, "info/attributes")
-			args, want := []string{"--mode", "always-lock"}, ""
+			args, want := []string{"--hook-mode", "always-lock"}, ""
 			switch scenario {
 			case "dry run":
 				args, want = append(args, "-n"), "would install git-age pre-commit hook"
@@ -493,7 +493,7 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 			}
 		})
 	}
-	for _, args := range [][]string{{"extra"}, {"--mode", "invalid"}} {
+	for _, args := range [][]string{{"extra"}, {"--hook-mode", "invalid"}} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(append([]string{"install"}, args...), &stdout, &stderr); code != 2 || stdout.Len() != 0 {
 			t.Fatalf("args %v: exit %d, output %q", args, code, &stdout)

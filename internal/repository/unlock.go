@@ -18,7 +18,7 @@ type UnlockSkips struct {
 }
 
 // Unlock decrypts the locked files, all or none of those it does not skip.
-func Unlock(directory string, files []ProtectedFile, identityPaths []string) (UnlockSkips, error) {
+func Unlock(directory string, files []ProtectedFile, identityPaths []string, dryRun bool) (UnlockSkips, error) {
 	var skips UnlockSkips
 	if err := CheckKnown(files); err != nil {
 		return skips, err
@@ -85,6 +85,9 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string) (Un
 			return skips, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 		}
 		replacements = append(replacements, replacement{path, original, plaintext})
+	}
+	if dryRun {
+		return skips, nil
 	}
 	return skips, replaceFiles(replacements)
 }

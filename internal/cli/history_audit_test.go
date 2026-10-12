@@ -45,57 +45,51 @@ func writeKey(t *testing.T, identity *age.X25519Identity) string {
 	return directory + "/key"
 }
 
-func TestAuditFindsPlaintext(t *testing.T) {
+func TestHistoryAuditFindsPlaintext(t *testing.T) {
 	directory, _ := auditFixture(t)
-	output, err := runCommand(directory, "audit")
+	output, err := runCommand(directory, "history", "audit")
 	if !errors.Is(err, errCheckFailed) || !strings.Contains(output, "Protected files committed as plaintext:\n\n  secret.env\n") ||
 		!strings.Contains(output, "  before .gitage\n") || strings.Contains(output, "readme") {
 		t.Fatalf("audit: %v\n%s", err, output)
 	}
-	if output, err := runCommand(directory, "audit", "--yes"); err == nil || !strings.Contains(err.Error(), "need --rekey") {
-		t.Fatalf("audit --yes: %v\n%s", err, output)
-	}
-	if output, err := runCommand(directory, "audit", "--rekey", "--reflog"); err == nil || !strings.Contains(err.Error(), "takes no revisions") {
-		t.Fatalf("audit --rekey --reflog: %v\n%s", err, output)
-	}
-	if output, err := runCommand(directory, "audit", "no-such-revision"); err == nil || errors.Is(err, errCheckFailed) {
+	if output, err := runCommand(directory, "history", "audit", "no-such-revision"); err == nil || errors.Is(err, errCheckFailed) {
 		t.Fatalf("audit of a bad revision: %v\n%s", err, output)
 	}
 }
 
-func TestAuditReflog(t *testing.T) {
+func TestHistoryAuditReflog(t *testing.T) {
 	directory, _ := auditFixture(t)
-	if _, err := runCommand(directory, "audit", "--yes", "--rekey", "--plaintext-only"); err != nil {
+	if _, err := runCommand(directory, "history", "rekey", "--yes", "--plaintext-only"); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, directory, "update-ref", "-d", "refs/git-age/original/refs/heads/master")
-	if output, err := runCommand(directory, "audit"); err != nil {
+	if output, err := runCommand(directory, "history", "audit"); err != nil {
 		t.Fatalf("audit after rekey: %v\n%s", err, output)
 	}
-	if output, err := runCommand(directory, "audit", "--reflog"); !errors.Is(err, errCheckFailed) || !strings.Contains(output, "  secret.env\n") {
+	if output, err := runCommand(directory, "history", "audit", "--reflog"); !errors.Is(err, errCheckFailed) || !strings.Contains(output, "  secret.env\n") {
 		t.Fatalf("audit --reflog: %v\n%s", err, output)
 	}
 }
 
-func TestAuditWarnsAboutInvalidHistoricalRules(t *testing.T) {
+func TestHistoryAuditWarnsAboutInvalidHistoricalRules(t *testing.T) {
 	directory, _ := auditFixture(t)
 	writeFile(t, directory, "sub/.gitage", "[unknown]\n")
 	runGit(t, directory, "add", ".")
 	runGit(t, directory, "commit", "-qm", "invalid rules")
 	runGit(t, directory, "rm", "-q", "sub/.gitage")
 	runGit(t, directory, "commit", "-qm", "drop invalid rules")
-	output, err := runCommand(directory, "audit")
+	output, err := runCommand(directory, "history", "audit")
 	if !errors.Is(err, errCheckFailed) || !strings.Contains(output, "warning:") || !strings.Contains(output, "  secret.env\n") {
 		t.Fatalf("audit: %v\n%s", err, output)
 	}
 }
 
-func TestAuditRekeyPlaintextOnlyKeepsCiphertext(t *testing.T) {
+func TestHistoryRekeyPlaintextOnlyKeepsCiphertext(t *testing.T) {
 	directory, identity := auditFixture(t)
 	locked := runGit(t, directory, "show", "HEAD:secret.env")
-	output, err := runCommand(directory, "audit", "--rekey", "--yes", "--plaintext-only")
+	output, err := runCommand(directory, "history", "rekey", "--yes", "--plaintext-only")
 	if err != nil || !strings.Contains(output, "1 plaintext version(s) encrypted, 0 re-encrypted") {
-		t.Fatalf("audit --rekey --plaintext-only: %v\n%s", err, output)
+		t.Fatalf("history rekey --plaintext-only: %v\n%s", err, output)
 	}
 	if !bytes.Equal(runGit(t, directory, "show", "HEAD:secret.env"), locked) {
 		t.Fatal("--plaintext-only re-encrypted ciphertext")
@@ -106,65 +100,65 @@ func TestAuditRekeyPlaintextOnlyKeepsCiphertext(t *testing.T) {
 	}
 }
 
-func TestAuditRekeyKeepUndecryptable(t *testing.T) {
+func TestHistoryRekeyKeepUndecryptable(t *testing.T) {
 	directory, identity := auditFixture(t)
 	other := newIdentity(t)
 	writeFile(t, directory, "other.env", string(encryptFixture(t, other.Recipient(), "theirs\n", false)))
 	runGit(t, directory, "add", ".")
 	runGit(t, directory, "commit", "-qm", "someone else's file")
 	head := strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD")))
-	output, err := runCommand(directory, "audit", "--rekey", "--yes")
+	output, err := runCommand(directory, "history", "rekey", "--yes")
 	if err == nil || !strings.Contains(output, "  other.env in ") || !strings.Contains(err.Error(), "nothing was changed") {
-		t.Fatalf("audit --rekey: %v\n%s", err, output)
+		t.Fatalf("history rekey: %v\n%s", err, output)
 	}
 	if strings.TrimSpace(string(runGit(t, directory, "rev-parse", "HEAD"))) != head {
 		t.Fatal("a refused rekey moved HEAD")
 	}
-	output, err = runCommand(directory, "audit", "--rekey", "--yes", "--keep-undecryptable")
+	output, err = runCommand(directory, "history", "rekey", "--yes", "--keep-undecryptable")
 	if err != nil || !strings.Contains(output, "kept 1 version(s) you cannot decrypt") {
-		t.Fatalf("audit --rekey --keep-undecryptable: %v\n%s", err, output)
+		t.Fatalf("history rekey --keep-undecryptable: %v\n%s", err, output)
 	}
 	assertDecrypts(t, runGit(t, directory, "show", "HEAD:other.env"), other, []byte("theirs\n"))
 	assertDecrypts(t, runGit(t, directory, "show", "HEAD~2:secret.env"), identity, []byte("TOKEN=early\n"))
 }
 
-func TestAuditRekeyRewritesStash(t *testing.T) {
+func TestHistoryRekeyRewritesStash(t *testing.T) {
 	directory, identity := auditFixture(t)
-	if _, err := runCommand(directory, "audit", "--rekey", "--yes"); err != nil {
+	if _, err := runCommand(directory, "history", "rekey", "--yes"); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, directory, "update-ref", "-d", "refs/git-age/original/refs/heads/master")
 	writeFile(t, directory, "secret.env", "TOKEN=stashed\n")
 	runGit(t, directory, "stash", "-q")
-	if output, err := runCommand(directory, "audit"); !errors.Is(err, errCheckFailed) || !strings.Contains(output, "WIP on master: ") {
+	if output, err := runCommand(directory, "history", "audit"); !errors.Is(err, errCheckFailed) || !strings.Contains(output, "WIP on master: ") {
 		t.Fatalf("audit of the stash: %v\n%s", err, output)
 	}
-	output, err := runCommand(directory, "audit", "--rekey", "--yes")
+	output, err := runCommand(directory, "history", "rekey", "--yes")
 	if err != nil || !strings.Contains(output, "1 plaintext version(s) encrypted") {
-		t.Fatalf("audit --rekey: %v\n%s", err, output)
+		t.Fatalf("history rekey: %v\n%s", err, output)
 	}
-	if output, err := runCommand(directory, "audit"); err != nil {
+	if output, err := runCommand(directory, "history", "audit"); err != nil {
 		t.Fatalf("audit after rekey: %v\n%s", err, output)
 	}
 	assertDecrypts(t, runGit(t, directory, "show", "stash@{0}:secret.env"), identity, []byte("TOKEN=stashed\n"))
-	if _, err := runCommand(directory, "audit", "--rekey", "--yes"); err == nil || !strings.Contains(err.Error(), "previous rewrite") {
+	if _, err := runCommand(directory, "history", "rekey", "--yes"); err == nil || !strings.Contains(err.Error(), "previous rewrite") {
 		t.Fatalf("second rekey: %v", err)
 	}
 }
 
-func TestAuditRekeyDetachedHead(t *testing.T) {
+func TestHistoryRekeyDetachedHead(t *testing.T) {
 	directory, identity := auditFixture(t)
 	runGit(t, directory, "checkout", "-q", "--detach")
 	runGit(t, directory, "branch", "-q", "-D", "master")
-	output, err := runCommand(directory, "audit", "--rekey", "--yes")
+	output, err := runCommand(directory, "history", "rekey", "--yes")
 	if err != nil || !strings.Contains(output, "rewriting 2 of 2 commit(s) and 1 ref(s)") {
-		t.Fatalf("audit --rekey: %v\n%s", err, output)
+		t.Fatalf("history rekey: %v\n%s", err, output)
 	}
 	assertDecrypts(t, runGit(t, directory, "show", "HEAD~1:secret.env"), identity, []byte("TOKEN=early\n"))
 	if !bytes.Equal(readFile(t, directory, "secret.env"), runGit(t, directory, "show", "HEAD:secret.env")) {
 		t.Fatal("the working tree was not checked out to the new HEAD")
 	}
-	if output, err := runCommand(directory, "audit", "--rekey", "--yes"); err == nil {
+	if output, err := runCommand(directory, "history", "rekey", "--yes"); err == nil {
 		t.Fatalf("second rekey: %s", output)
 	}
 }

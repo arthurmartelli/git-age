@@ -48,7 +48,7 @@ func TestUnlock(t *testing.T) {
 				if unselected, _ := os.ReadFile(filepath.Join(directory, "sub/b.env")); !bytes.Equal(unselected, content) {
 					t.Fatal("unselected file changed")
 				}
-				if output, err := runCommand(directory, "unlock", append([]string{"-v"}, append(args, "a.env")...)...); err != nil || output != "already unlocked: a.env\n" {
+				if output, err := runCommand(directory, "unlock", append([]string{"-v"}, append(args, "a.env")...)...); err != nil || output != "already unlocked: a.env\ngit-age: Unlocked 0 files; 1 already unlocked.\n" {
 					t.Fatalf("second unlock: %q, %v", output, err)
 				}
 				info, err := os.Stat(filepath.Join(directory, "a.env"))
@@ -85,6 +85,11 @@ func TestUnlockFailureChangesNothing(t *testing.T) {
 			}
 			writeFile(t, directory, "a.env", string(first))
 			writeFile(t, directory, "b.env", string(second))
+			before := installSnapshot(t, directory)
+			if output, err := runCommand(directory, "unlock", "-n"); err == nil || output != "" {
+				t.Fatalf("dry run must report decryption failure: %q, %v", output, err)
+			}
+			assertSnapshotUnchanged(t, directory, before)
 			_, err := runCommand(directory, "unlock")
 			if err == nil {
 				t.Fatal("expected decryption error")
@@ -117,15 +122,19 @@ func TestUnlockFailureChangesNothing(t *testing.T) {
 
 func TestUnlockDryRun(t *testing.T) {
 	directory := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AGE_KEY_FILE", "")
+	identity := newIdentity(t)
 	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
-	writeFile(t, directory, "a.env", "age-encryption.org/v1\n")
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	writeFile(t, directory, "a.env", string(encryptFixture(t, identity.Recipient(), "secret", false)))
+	before := installSnapshot(t, directory)
 	output, err := runCommand(directory, "unlock", "-n")
-	if err != nil || output != "would unlock: a.env\n" {
+	if err != nil || output != "git-age: Would unlock 1 file.\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
 	}
-	if after, _ := os.ReadFile(filepath.Join(directory, "a.env")); string(after) != "age-encryption.org/v1\n" {
-		t.Fatal("dry run changed file")
-	}
+	assertSnapshotUnchanged(t, directory, before)
 }
 
 func TestUnlockFromSubdirectory(t *testing.T) {
@@ -148,7 +157,7 @@ func TestUnlockAlreadyPlaintextNeedsNoKey(t *testing.T) {
 	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
 	writeFile(t, directory, "a.env", "plaintext")
 	output, err := runCommand(directory, "unlock", "-v", "-i", "missing.key")
-	if err != nil || output != "already unlocked: a.env\n" {
+	if err != nil || output != "already unlocked: a.env\ngit-age: Unlocked 0 files; 1 already unlocked.\n" {
 		t.Fatalf("already unlocked: %q, %v", output, err)
 	}
 }

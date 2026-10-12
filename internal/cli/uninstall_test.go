@@ -34,7 +34,7 @@ func TestUninstall(t *testing.T) {
 			attributes := installGitPath(t, workingDirectory, "info/attributes")
 			prefix, suffix := "# user prefix\r\n*.txt diff=custom\r\n", "*.md diff=markdown\r\n# user suffix\r\n"
 			writeFile(t, filepath.Dir(attributes), "attributes", prefix)
-			if _, err := runCommand(workingDirectory, "install", "--mode=always-lock", "--unlock-after-commit"); err != nil {
+			if _, err := runCommand(workingDirectory, "install", "--hook-mode=always-lock", "--unlock-after-commit"); err != nil {
 				t.Fatal(err)
 			}
 			content, err := os.ReadFile(attributes)
@@ -152,7 +152,7 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 			initKeygenRepo(t, directory)
 			args, want := []string{}, ""
 			if scenario != "missing installation" {
-				if _, err := runCommand(directory, "install", "--mode=abort"); err != nil {
+				if _, err := runCommand(directory, "install", "--hook-mode=abort"); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -256,7 +256,7 @@ func TestUninstallKeepsInheritedConfig(t *testing.T) {
 	global := "[age]\nhookMode = abort\nunlockAfterCommit = true\n[diff \"age\"]\ntextconv = global\ncachetextconv = false\n[merge \"age\"]\ndriver = global\n[filter \"age\"]\nclean = global\n"
 	writeFile(t, globalDirectory, "gitconfig", global)
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
-	if _, err := runCommand(directory, "install", "--mode=always-lock"); err != nil {
+	if _, err := runCommand(directory, "install", "--hook-mode=always-lock"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runCommand(directory, "uninstall"); err != nil {

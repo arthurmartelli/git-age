@@ -77,7 +77,14 @@ The full manual is built in:
 git-age help            # the whole manual
 git-age help TOPIC      # one section, e.g. `git-age help teamwork`
 git-age help COMMAND    # a command's options
+git-age help history rekey  # a history subcommand's options
 ```
+
+Inspect history with `git-age history audit`. To encrypt plaintext and
+re-encrypt protected history for the current recipients, preview with
+`git-age history rekey --dry-run`, then run `git-age history rekey`.
+This rewrites local branches, tags and the stash, and keeps the original
+refs for recovery. See `git-age help history-rekey` for the full workflow.
 
 Shell completion for bash, zsh and fish: `git-age completion SHELL`.
 

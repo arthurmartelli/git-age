@@ -13,17 +13,17 @@ import (
 var errCheckFailed = errors.New("check failed")
 
 func newCheckCommand(options *globalOptions) *cobra.Command {
-	var cached bool
+	var staged bool
 
 	check := &cobra.Command{
-		Use:   "check",
+		Use:   "check [PATH ...]",
 		Short: "fail if protected files are plaintext",
-		Args:  cobra.NoArgs,
+		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var files []repository.ProtectedFile
 			var err error
-			if cached {
-				result, err := repository.CheckIndex(options.directory)
+			if staged {
+				result, err := repository.CheckIndex(options.directory, args)
 				if err := refuseRemovedRules(cmd, result.RemovedRules, "To allow removal, set GIT_AGE_ALLOW_REMOVE=1."); err != nil {
 					return err
 				}
@@ -36,7 +36,7 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 				}
 				files = result.Files
 			} else {
-				files, err = repository.ProtectedFiles(options.directory, nil)
+				files, err = repository.ProtectedFiles(options.directory, args)
 				if err != nil {
 					return err
 				}
@@ -56,14 +56,14 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 			}
 			if len(unlocked) != 0 {
 				message := "protected files are currently unlocked"
-				if cached {
+				if staged {
 					message = "protected files are staged as plaintext"
 				}
 				return reportCheckFailure(cmd, message, unlocked, "")
 			}
 			if options.verbose {
 				message := "protected working-tree files are locked"
-				if cached {
+				if staged {
 					message = "staged protected files are locked"
 				}
 				_, err = fmt.Fprintln(cmd.OutOrStdout(), "git-age: "+message)
@@ -71,7 +71,7 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 			return err
 		},
 	}
-	check.Flags().BoolVar(&cached, "cached", false, "check staged files using the staged .gitage rules")
+	check.Flags().BoolVar(&staged, "staged", false, "check the index contents using the staged .gitage rules")
 	return check
 }
 

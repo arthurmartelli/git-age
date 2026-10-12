@@ -70,6 +70,35 @@ func TestHelpUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestHelpHistorySubcommands(t *testing.T) {
+	for _, test := range []struct {
+		command string
+		option  string
+	}{
+		{"audit", "--reflog"},
+		{"rekey", "--keep-undecryptable"},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			var help, direct, stderr bytes.Buffer
+			if code := Run([]string{"help", "history", test.command}, &help, &stderr); code != 0 {
+				t.Fatalf("help: exit %d, %s", code, &stderr)
+			}
+			if code := Run([]string{"history", test.command, "--help"}, &direct, &stderr); code != 0 {
+				t.Fatalf("direct help: exit %d, %s", code, &stderr)
+			}
+			if help.String() != direct.String() || !strings.Contains(help.String(), "git-age history "+test.command) || !strings.Contains(help.String(), test.option) {
+				t.Fatalf("nested help differs or is missing options: %s", &help)
+			}
+		})
+	}
+	for _, args := range [][]string{{"help", "history", "unknown"}, {"help", "history", "audit", "extra"}, {"help", "commands", "extra"}} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "unknown help command") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, &stdout, &stderr)
+		}
+	}
+}
+
 func TestHelpTopic(t *testing.T) {
 	for _, topic := range []string{"commands", "git-hooks", "gitage", "shell-completion"} {
 		t.Run(topic, func(t *testing.T) {

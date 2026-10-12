@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// originalRefs backs up the refs `audit --rekey` rewrote, so that it can be undone.
+// originalRefs backs up the refs `history rekey` rewrote, so that it can be undone.
 const originalRefs = "refs/git-age/original"
 
 // DeleteOriginalRefs is the command that drops the backup of a history rekey.
@@ -356,7 +356,7 @@ type Leaks struct {
 // Audit searches the commits of revisions, or of every ref but the backup of
 // a history rekey, for plaintext at protected paths and for private keys.
 func Audit(directory string, revisions []string, reflog bool) (Leaks, error) {
-	root, err := Root(directory, "audit")
+	root, err := Root(directory, "history audit")
 	if err != nil {
 		return Leaks{}, err
 	}

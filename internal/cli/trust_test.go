@@ -31,11 +31,11 @@ func assertUnpinned(t *testing.T, directory string) {
 	}
 }
 
-func trustShow(t *testing.T, directory string) string {
+func readTrustHash(t *testing.T, directory string) string {
 	t.Helper()
-	output, err := runCommand(directory, "trust", "--show")
+	output, err := runCommand(directory, "trust", "--hash")
 	if err != nil {
-		t.Fatalf("trust --show: %q, %v", output, err)
+		t.Fatalf("trust --hash: %q, %v", output, err)
 	}
 	return strings.TrimSpace(output)
 }
@@ -43,19 +43,19 @@ func trustShow(t *testing.T, directory string) string {
 func TestTrustHashIgnoresOrderAndComments(t *testing.T) {
 	directory, alice, bob := trustFixture(t)
 	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+alice+"\n"+bob+"\n")
-	hash := trustShow(t, directory)
+	hash := readTrustHash(t, directory)
 	if len(hash) != 64 {
 		t.Fatalf("hash: %q", hash)
 	}
 	writeFile(t, directory, ".gitage", "# team\n[recipients]\n"+bob+"\n\n  "+alice+"\n"+bob+"\n[files]\n*.env\n")
-	if got := trustShow(t, directory); got != hash {
+	if got := readTrustHash(t, directory); got != hash {
 		t.Fatalf("reordered lists hash %q, want %q", got, hash)
 	}
 	writeFile(t, directory, "sub/.gitage", "[recipients]\n"+alice+"\n")
-	if got := trustShow(t, directory); got == hash {
+	if got := readTrustHash(t, directory); got == hash {
 		t.Fatal("a nested list did not change the hash")
 	}
-	if got := trustShow(t, filepath.Join(directory, "sub")); got == hash {
+	if got := readTrustHash(t, filepath.Join(directory, "sub")); got == hash {
 		t.Fatal("-C subdir must hash every list in the worktree")
 	}
 	assertUnpinned(t, directory)
@@ -71,7 +71,7 @@ func TestTrustPinsAndLockRefusesChanges(t *testing.T) {
 	if output, err := runCommand(directory, "trust"); err != nil || !strings.Contains(output, "pinned ") {
 		t.Fatalf("trust: %q, %v", output, err)
 	}
-	if pinned := strings.TrimSpace(string(runGit(t, directory, "config", "age.trustedRecipients"))); pinned != trustShow(t, directory) {
+	if pinned := strings.TrimSpace(string(runGit(t, directory, "config", "age.trustedRecipients"))); pinned != readTrustHash(t, directory) {
 		t.Fatalf("pinned %q", pinned)
 	}
 	if output, err := runCommand(directory, "trust"); err != nil || !strings.Contains(output, "already trusted") {
@@ -81,6 +81,11 @@ func TestTrustPinsAndLockRefusesChanges(t *testing.T) {
 	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+alice+"\n"+bob+"\n")
 	runGit(t, directory, "add", ".gitage")
 	runGit(t, directory, "-c", "user.name=Mallory", "-c", "user.email=mallory@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "widen access")
+	before := installSnapshot(t, directory)
+	if output, err := runCommand(directory, "lock", "-n"); err == nil || output != "" || !strings.Contains(err.Error(), "untrusted [recipients]") {
+		t.Fatalf("dry run missed untrusted recipients: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
 	output, err = runCommand(directory, "lock")
 	if err == nil || !strings.Contains(err.Error(), "untrusted [recipients]") || !strings.Contains(err.Error(), "    + "+bob) ||
 		!strings.Contains(err.Error(), "Mallory <mallory@example.com>  widen access") || strings.Contains(err.Error(), "uncommitted") {
@@ -120,7 +125,7 @@ func TestTrustPinMissingFromHistory(t *testing.T) {
 
 func TestTrustEnvironmentOverride(t *testing.T) {
 	directory, _, _ := trustFixture(t)
-	hash := trustShow(t, directory)
+	hash := readTrustHash(t, directory)
 	t.Setenv("GIT_AGE_TRUSTED_RECIPIENTS", strings.ToUpper(hash))
 	runGit(t, directory, "config", "age.trustedRecipients", "deadbeef")
 	if output, err := runCommand(directory, "lock"); err != nil {
@@ -152,4 +157,56 @@ func TestTrustRequiresWorktree(t *testing.T) {
 	if untrusted, err := repository.RecipientsUntrusted(directory); err != nil || untrusted {
 		t.Fatalf("outside Git: %v, %v", untrusted, err)
 	}
+}
+
+func TestTrustShow(t *testing.T) {
+	directory, alice, bob := trustFixture(t)
+	before := installSnapshot(t, directory)
+	output, err := runCommand(directory, "trust", "--show")
+	if err != nil || !strings.Contains(output, "Recipient trust: unpinned\n") || !strings.Contains(output, "  .gitage\n    "+alice+"\n") {
+		t.Fatalf("unpinned show: %q, %v", output, err)
+	}
+	assertUnpinned(t, directory)
+	assertSnapshotUnchanged(t, directory, before)
+	mustCommand(t, directory, "trust")
+	pinned := readTrustHash(t, directory)
+	before = installSnapshot(t, directory)
+	output, err = runCommand(directory, "trust", "--show")
+	if err != nil || !strings.Contains(output, "Recipient trust: trusted\n") || !strings.Contains(output, alice) || strings.Contains(output, "Changes since approval:") {
+		t.Fatalf("trusted show: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+bob+"\n")
+	writeFile(t, directory, "sub/.gitage", "[recipients]\n"+alice+"\n")
+	before = installSnapshot(t, directory)
+	output, err = runCommand(filepath.Join(directory, "sub"), "trust", "--show")
+	for _, want := range []string{"Recipient trust: changed since approval\n", "Approval source: git config age.trustedRecipients\n", "Current [recipients] lists:", "  sub/.gitage\n    " + alice, "Changes since approval:", "    + " + bob, "    - " + alice} {
+		if err != nil || !strings.Contains(output, want) {
+			t.Fatalf("changed show missing %q: %q, %v", want, output, err)
+		}
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	if got := strings.TrimSpace(string(runGit(t, directory, "config", "age.trustedRecipients"))); got != pinned {
+		t.Fatalf("show changed approval: %q", got)
+	}
+	t.Setenv("GIT_AGE_TRUSTED_RECIPIENTS", readTrustHash(t, directory))
+	output, err = runCommand(directory, "trust", "--show")
+	if err != nil || !strings.Contains(output, "Recipient trust: trusted\n") || !strings.Contains(output, "Approval source: GIT_AGE_TRUSTED_RECIPIENTS\n") {
+		t.Fatalf("environment approval: %q, %v", output, err)
+	}
+	if output, err := runCommand(directory, "trust", "--show", "--hash"); err == nil || output != "" {
+		t.Fatalf("conflicting output modes: %q, %v", output, err)
+	}
+}
+
+func TestTrustShowWithoutRecipients(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	t.Setenv("GIT_AGE_TRUSTED_RECIPIENTS", "")
+	output, err := runCommand(directory, "trust", "--show")
+	if err != nil || !strings.Contains(output, "  (none)\n") {
+		t.Fatalf("empty lists: %q, %v", output, err)
+	}
+	assertUnpinned(t, directory)
 }

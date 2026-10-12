@@ -20,16 +20,21 @@ func newUnlockCommand(options *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var skips repository.UnlockSkips
-			if !options.dryRun {
-				if skips, err = repository.Unlock(options.directory, files, identities); err != nil {
-					return err
-				}
-			}
-			if err := reportFiles(cmd, options, files, repository.Unlocked, "unlock"); err != nil {
+			skips, err := repository.Unlock(options.directory, files, identities, options.dryRun)
+			if err != nil {
 				return err
 			}
-			return reportUnlockSkips(cmd, options, skips)
+			skipped := map[string]string{}
+			for _, file := range skips.NoAccess {
+				skipped[file.Path] = "not encrypted to you"
+			}
+			for _, file := range skips.NotRekeyed {
+				skipped[file.Path] = "not re-encrypted to you yet"
+			}
+			if err := reportFiles(cmd, options, files, repository.Unlocked, "unlock", skipped); err != nil {
+				return err
+			}
+			return reportUnlockAdvice(cmd, skips.NotRekeyed)
 		},
 	}
 	identityFlags(unlock.Flags(), &identities)
@@ -55,14 +60,18 @@ func reportUnlockSkips(cmd *cobra.Command, options *globalOptions, skips reposit
 			return err
 		}
 	}
-	if len(skips.NotRekeyed) == 0 {
+	return reportUnlockAdvice(cmd, skips.NotRekeyed)
+}
+
+func reportUnlockAdvice(cmd *cobra.Command, notRekeyed []repository.ProtectedFile) error {
+	if len(notRekeyed) == 0 {
 		return nil
 	}
 	var output strings.Builder
 	output.WriteString("git-age: these files are not re-encrypted to you yet; someone who can decrypt them must run `git-age rekey`:\n")
-	for _, file := range skips.NotRekeyed {
+	for _, file := range notRekeyed {
 		fmt.Fprintf(&output, "  %s\n", quoteStatusPath(file.Path))
 	}
-	_, err := fmt.Fprint(stderr, output.String())
+	_, err := fmt.Fprint(cmd.ErrOrStderr(), output.String())
 	return err
 }

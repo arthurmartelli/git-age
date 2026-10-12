@@ -98,14 +98,18 @@ COMMANDS
 	or copies made by the editor. Forced termination can leave the
 	temporary copy behind.
 
-    check
-        Fail if a protected file is unlocked.
+    check [PATH...]
+	Fail if a selected protected file is unlocked.
 
-        `--cached` checks what is staged, like the pre-commit hook.
+	`--staged` checks the index contents using the staged `.gitage`
+	rules, including selected files unchanged since the last commit.
+	Private-key and removed-rule checks still cover all staged changes.
 
     install
         Install Git hooks, readable diffs, clean-status support and the
         merge driver.
+	`--hook-mode` selects the pre-commit policy: interactive,
+	always-lock, or abort.
 
     uninstall
         Remove the Git integration installed by git-age.
@@ -118,19 +122,34 @@ COMMANDS
     trust
         Trust the current `[recipients]` lists.
 
-        `--show` prints their current hash.
+	`--show` displays the current recipients, trust status and changes
+	since approval without approving anything.
+	`--hash` prints only the current recipient-list hash for scripts.
 
-    audit
-        Search Git history for protected files committed as plaintext
-        or for committed private keys.
+    history
+	Inspect or rewrite protected files in Git history.
 
-        `--rekey` can rewrite history so protected files are encrypted.
+    history audit [REV...]
+	Search Git history for protected files committed as plaintext
+	or for committed private keys.
+
+	With no revisions, search all refs except history-rekey backups.
+	`--reflog` also searches commits kept only by reflogs.
+
+    history rekey
+	Rewrite local branches, tags and the stash to encrypt protected
+	files for the current recipients. Takes no paths or revisions.
+
+	`--plaintext-only` keeps existing ciphertext.
+	`--keep-undecryptable` keeps versions you cannot decrypt.
+	`--yes` skips confirmation. Use `--dry-run` to preview changes.
 
     completion SHELL
-        Print completion for bash, zsh or fish.
+	Print completion for bash, zsh or fish.
 
-    help [TOPIC]
-        Show this manual or one section of it.
+    help [TOPIC|COMMAND...]
+	Show this manual, one section, or a command's options.
+	For example: `git-age help history rekey`.
 
 
 Global options:
@@ -143,10 +162,11 @@ Global options:
 PATHS
 -----
 
-`lock`, `unlock`, `rekey` and `status` accept optional paths:
+`lock`, `unlock`, `rekey`, `status` and `check` accept optional paths:
 
     $ git-age status secrets/
     $ git-age lock config/app.yaml
+    $ git-age check --staged config/app.yaml
 
 Paths are relative to `-C`, like Git paths.
 
@@ -154,7 +174,15 @@ Only files protected by `.gitage` are affected. Passing a path that
 matches no protected file is an error.
 
 `lock`, `unlock` and `rekey` are transactional: either every selected
-file is changed or none of them are.
+file eligible for the operation is changed or none of them are.
+
+These commands print a summary with changed, unchanged and skipped
+counts. Use `--verbose` for per-file details.
+
+Use `--dry-run` to preview the outcome without changing files. Dry runs
+check identities, recipients and decryption, so they report inaccessible
+files and failures just as the real operation would. Use `--verbose`
+with `--dry-run` to list each file's expected outcome.
 
 File permissions, ACLs and extended attributes are preserved.
 
@@ -361,6 +389,10 @@ GIT HOOKS
 `git-age install` installs hooks that help prevent plaintext secrets from
 being committed or pushed.
 
+Choose the pre-commit policy when installing:
+
+    $ git-age install --hook-mode=always-lock
+
 
 Pre-commit
 ~~~~~~~~~~
@@ -424,7 +456,7 @@ Fix the history before pushing, for example with:
 
     $ git commit --amend
     $ git rebase -i
-    $ git-age audit --rekey
+    $ git-age history rekey
 
 To bypass the check explicitly:
 
@@ -598,9 +630,9 @@ inside the stash commit.
 
 The stash remains local and is not examined by the pre-push hook.
 
-`git-age audit` does inspect it, and:
+`git-age history audit` does inspect it, and:
 
-    $ git-age audit --rekey
+    $ git-age history rekey
 
 rewrites `refs/stash`.
 
@@ -716,6 +748,7 @@ make future encryption include it.
 
 Review the current recipients and run:
 
+    $ git-age trust --show
     $ git-age trust
 
 git-age stores a hash of the approved recipient lists.
@@ -743,7 +776,7 @@ AUDITING HISTORY
 
 Run:
 
-    $ git-age audit
+    $ git-age history audit
 
 to search Git history for:
 
@@ -771,15 +804,15 @@ Use `--reflog` to also inspect commits reachable only from reflogs.
 LEAKED SECRETS
 --------------
 
-If `git-age audit` finds plaintext, assume anyone with a copy of the
-repository may have seen it.
+If `git-age history audit` finds plaintext, assume anyone with a copy
+of the repository may have seen it.
 
 Rotate the affected secret.
 
 You can then rewrite local history:
 
-    $ git-age -n audit --rekey
-    $ git-age audit --rekey
+    $ git-age history rekey -n
+    $ git-age history rekey
 
 The first command shows what would change.
 
@@ -787,13 +820,24 @@ The first command shows what would change.
 HISTORY REKEY
 -------------
 
-`git-age audit --rekey` rewrites local branches, tags and the stash so
+`git-age history rekey` rewrites local branches, tags and the stash so
 protected files use the current recipients.
 
 By default it re-encrypts both plaintext and existing ciphertext.
 
-The operation requires an identity capable of decrypting the protected
-history.
+The operation requires identities capable of decrypting the protected
+history. Use `--identity` to supply identity files and `--recipient`
+to override the configured recipients. Both options may be repeated.
+
+Use `--plaintext-only` to encrypt plaintext while keeping existing
+ciphertext. This mode does not require an identity.
+
+By default, an undecryptable protected version aborts the rewrite.
+Use `--keep-undecryptable` to leave such versions unchanged instead.
+
+The command previews the rewrite and asks for confirmation. Use
+`--yes` to run without asking; scripts without a terminal must pass it.
+Use `--dry-run` to preview without writing objects or moving refs.
 
 It refuses to run when:
 
@@ -814,7 +858,7 @@ until you remove them.
 
 After checking the result:
 
-    $ git-age audit -- --branches --tags
+    $ git-age history audit -- --branches --tags
 
 force-push rewritten branches and tags if the rewritten history must
 replace remote history.
@@ -833,7 +877,7 @@ A committed private key is compromised.
 Generate a replacement, update its recipient in `.gitage`, and run:
 
     $ git-age rekey
-    $ git-age audit --rekey
+    $ git-age history rekey
 
 History rekey warns about committed private keys but does not remove
 their files from history.

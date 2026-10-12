@@ -22,7 +22,7 @@ var tagSignature = regexp.MustCompile(`(?m)^-----BEGIN (?:PGP SIGNATURE|PGP MESS
 
 // CheckRewritable refuses to rewrite history where that could lose work or miss commits.
 func CheckRewritable(directory string) error {
-	root, err := Root(directory, "audit --rekey")
+	root, err := Root(directory, "history rekey")
 	if err != nil {
 		return err
 	}
@@ -520,7 +520,7 @@ func (r *HistoryRekey) Apply() error {
 		commands = append(commands, fmt.Sprintf("update %s %s %s", move.Ref, move.New, move.Old))
 	}
 	commands = append(commands, "prepare", "commit", "")
-	if _, err := gitWithInput(r.root, []byte(strings.Join(commands, "\n")), "update-ref", "-m", "git-age audit --rekey", "--stdin"); err != nil {
+	if _, err := gitWithInput(r.root, []byte(strings.Join(commands, "\n")), "update-ref", "-m", "git-age history rekey", "--stdin"); err != nil {
 		return fmt.Errorf("cannot update the refs; none was changed: %w", err)
 	}
 
@@ -552,6 +552,6 @@ func (r *HistoryRekey) Apply() error {
 	for i, identity := range r.identities {
 		identities[i] = absolutePath(r.directory, identity)
 	}
-	_, err = Unlock(r.root, relock, identities)
+	_, err = Unlock(r.root, relock, identities, false)
 	return err
 }

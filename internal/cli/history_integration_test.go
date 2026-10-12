@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestAuditHistoryWorkflow(t *testing.T) {
+func TestHistoryWorkflow(t *testing.T) {
 	directory, alice := auditFixture(t)
 	bob := newIdentity(t)
 	rules := "[files]\n*.env\n[recipients]\n" + alice.Recipient().String() + "\n" + bob.Recipient().String() + "\n"
@@ -38,7 +38,7 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 	runGit(t, directory, "tag", "-a", "v1", "-m", "release")
 	runGit(t, directory, "-c", "advice.nestedTag=false", "tag", "-a", "v1-nested", "-m", "tag of a tag", "v1")
 
-	output, err := runCommand(directory, "audit")
+	output, err := runCommand(directory, "history", "audit")
 	if !errors.Is(err, errCheckFailed) {
 		t.Fatalf("audit: %v\n%s", err, output)
 	}
@@ -50,14 +50,14 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 	if strings.Contains(output, "readme") {
 		t.Fatalf("unprotected file reported: %s", output)
 	}
-	output, err = runCommand(directory, "audit", "master~1")
+	output, err = runCommand(directory, "history", "audit", "master~1")
 	if !errors.Is(err, errCheckFailed) || strings.Contains(output, "side.env") {
 		t.Fatalf("revision selection: %v\n%s", err, output)
 	}
 	if err := os.Mkdir(filepath.Join(directory, "sub"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	output, err = runCommand(filepath.Join(directory, "sub"), "audit")
+	output, err = runCommand(filepath.Join(directory, "sub"), "history", "audit")
 	if !errors.Is(err, errCheckFailed) || !strings.Contains(output, "  secret.env\n") {
 		t.Fatalf("subdirectory audit: %v\n%s", err, output)
 	}
@@ -67,13 +67,13 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 	before := gitRevision(t, directory, "HEAD")
 	refs := runGit(t, directory, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/", "refs/tags/")
 	objects := installSnapshot(t, installGitPath(t, directory, "objects"))
-	output = mustCommand(t, directory, "audit", "--rekey", "-n")
+	output = mustCommand(t, directory, "history", "rekey", "-n")
 	if !strings.Contains(output, "would rewrite") || gitRevision(t, directory, "HEAD") != before || !bytes.Equal(refs, runGit(t, directory, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/", "refs/tags/")) || !reflect.DeepEqual(objects, installSnapshot(t, installGitPath(t, directory, "objects"))) {
 		t.Fatal("dry run changed history or wrote objects")
 	}
 	for _, scenario := range []string{"dirty working tree", "revisions", "wrong identity"} {
 		t.Run(scenario, func(t *testing.T) {
-			args, diagnostic := []string{"--rekey", "--yes"}, ""
+			args, diagnostic := []string{"--yes"}, ""
 			switch scenario {
 			case "dirty working tree":
 				writeFile(t, directory, "readme", "dirty\n")
@@ -88,7 +88,7 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 				t.Setenv("GIT_AGE_RECIPIENT", other.Recipient().String())
 				diagnostic = "cannot decrypt"
 			}
-			output, err := runCommand(directory, "audit", args...)
+			output, err := runCommand(directory, "history", append([]string{"rekey"}, args...)...)
 			if err == nil || !strings.Contains(output+err.Error(), diagnostic) {
 				t.Fatalf("refusal: %v\n%s", err, output)
 			}
@@ -97,8 +97,8 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 			}
 		})
 	}
-	output = mustCommand(t, directory, "audit", "--rekey", "--yes")
-	if !strings.Contains(output, "git-age audit -- --branches --tags") {
+	output = mustCommand(t, directory, "history", "rekey", "--yes")
+	if !strings.Contains(output, "git-age history audit -- --branches --tags") {
 		t.Fatalf("missing verification guidance: %s", output)
 	}
 	if gitRevision(t, directory, "HEAD") == before {
@@ -110,13 +110,13 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 			t.Fatalf("backup of %s: %s, want %s", fields[0], got, fields[1])
 		}
 	}
-	mustCommand(t, directory, "audit")
+	mustCommand(t, directory, "history", "audit")
 	runGit(t, directory, "update-ref", "refs/remotes/origin/master", before)
-	output, err = runCommand(directory, "audit")
+	output, err = runCommand(directory, "history", "audit")
 	if !errors.Is(err, errCheckFailed) || !strings.Contains(output, "  secret.env\n") {
 		t.Fatalf("remote history ignored: %v\n%s", err, output)
 	}
-	mustCommand(t, directory, "audit", "--", "--branches", "--tags")
+	mustCommand(t, directory, "history", "audit", "--", "--branches", "--tags")
 	if gitRevision(t, directory, "refs/remotes/origin/master") != before {
 		t.Fatal("rewrite changed remote-tracking ref")
 	}
@@ -150,15 +150,15 @@ func TestAuditHistoryWorkflow(t *testing.T) {
 	if status := runGit(t, directory, "status", "--porcelain"); len(status) != 0 {
 		t.Fatalf("rewrite left dirty tree: %s", status)
 	}
-	if _, err := runCommand(directory, "audit", "--rekey", "--yes"); err == nil || !strings.Contains(err.Error(), "previous rewrite") {
+	if _, err := runCommand(directory, "history", "rekey", "--yes"); err == nil || !strings.Contains(err.Error(), "previous rewrite") {
 		t.Fatalf("second rewrite: %v", err)
 	}
 }
 
-func TestAuditPrivateKeyReporting(t *testing.T) {
+func TestHistoryAuditPrivateKeyReporting(t *testing.T) {
 	directory, identity := auditFixture(t)
-	mustCommand(t, directory, "audit", "--rekey", "--yes")
-	mustCommand(t, directory, "audit")
+	mustCommand(t, directory, "history", "rekey", "--yes")
+	mustCommand(t, directory, "history", "audit")
 	writeFile(t, directory, "k.txt", identity.String()+"\n")
 	runGit(t, directory, "add", "k.txt")
 	runGit(t, directory, "commit", "-qm", "key as k.txt")
@@ -174,7 +174,7 @@ func TestAuditPrivateKeyReporting(t *testing.T) {
 	writeFile(t, directory, ".gitage.key", "not a key either\n")
 	runGit(t, directory, "add", "-f", ".gitage.key")
 	runGit(t, directory, "commit", "-qm", "change .gitage.key")
-	output, err := runCommand(directory, "audit")
+	output, err := runCommand(directory, "history", "audit")
 	if !errors.Is(err, errCheckFailed) {
 		t.Fatalf("audit: %v\n%s", err, output)
 	}
@@ -187,7 +187,7 @@ func TestAuditPrivateKeyReporting(t *testing.T) {
 	if len(groups) != 2 || strings.Contains(groups[0], "  secret.env\n") || !strings.Contains(groups[1], "  secret.env\n") {
 		t.Fatalf("leak groups mixed:\n%s", output)
 	}
-	output, err = runCommand(directory, "audit", "-v")
+	output, err = runCommand(directory, "history", "audit", "-v")
 	if !errors.Is(err, errCheckFailed) || !strings.Contains(output, "  a .gitage.key\n") || !strings.Contains(output, "  change .gitage.key\n") || strings.Contains(output, "-v lists them") {
 		t.Fatalf("verbose audit: %v\n%s", err, output)
 	}
@@ -201,7 +201,7 @@ func TestAuditPrivateKeyReporting(t *testing.T) {
 	for _, ref := range strings.Fields(string(runGit(t, directory, "for-each-ref", "--format=%(refname)", "refs/git-age/original/"))) {
 		runGit(t, directory, "update-ref", "-d", ref)
 	}
-	output = mustCommand(t, directory, "audit", "--rekey", "-n")
+	output = mustCommand(t, directory, "history", "rekey", "-n")
 	if !strings.Contains(output, "private key file(s) are in Git history") {
 		t.Fatalf("missing committed-key warning: %s", output)
 	}
@@ -211,18 +211,18 @@ func TestAuditPrivateKeyReporting(t *testing.T) {
 	root := newRootCommand()
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(cleanBrokenWriter{streamErr})
-	root.SetArgs([]string{"-C", directory, "audit", "--rekey", "--yes"})
+	root.SetArgs([]string{"-C", directory, "history", "rekey", "--yes"})
 	head := gitRevision(t, directory, "HEAD")
 	if err := root.Execute(); !errors.Is(err, streamErr) || gitRevision(t, directory, "HEAD") != head {
 		t.Fatalf("failed warning changed refs or lost the error: %v", err)
 	}
 }
 
-func TestAuditRekeyRequiresTerminalOrYes(t *testing.T) {
+func TestHistoryRekeyRequiresTerminalOrYes(t *testing.T) {
 	binary := buildGitAge(t)
 	directory, _ := auditFixture(t)
 	before := gitRevision(t, directory, "HEAD")
-	command := exec.Command(binary, "-C", directory, "audit", "--rekey")
+	command := exec.Command(binary, "-C", directory, "history", "rekey")
 	// A nil Stdin gives the executable the null device, even when go test has a tty.
 	output, err := command.CombinedOutput()
 	if err == nil || !bytes.Contains(output, []byte("pass --yes")) || gitRevision(t, directory, "HEAD") != before {
@@ -230,12 +230,12 @@ func TestAuditRekeyRequiresTerminalOrYes(t *testing.T) {
 	}
 }
 
-func TestAuditAlreadyEncrypted(t *testing.T) {
+func TestHistoryRekeyAlreadyEncrypted(t *testing.T) {
 	isolateHookEnvironment(t)
 	directory, _, ciphertext := cleanFixture(t, []byte("original\n"), false)
 	refs := runGit(t, directory, "for-each-ref", "--format=%(refname) %(objectname)")
 	objects := installSnapshot(t, installGitPath(t, directory, "objects"))
-	output := mustCommand(t, directory, "audit", "--rekey", "--yes", "--plaintext-only")
+	output := mustCommand(t, directory, "history", "rekey", "--yes", "--plaintext-only")
 	if !strings.Contains(output, "history is already encrypted; nothing to do") {
 		t.Fatalf("missing no-op message: %s", output)
 	}

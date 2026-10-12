@@ -9,7 +9,7 @@ import (
 )
 
 func newTrustCommand(options *globalOptions) *cobra.Command {
-	var show bool
+	var show, hash bool
 
 	trust := &cobra.Command{
 		Use:   "trust",
@@ -21,8 +21,28 @@ func newTrustCommand(options *globalOptions) *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			if show {
+			if hash {
 				_, err := fmt.Fprintln(out, trust.Hash)
+				return err
+			}
+			if show {
+				var text strings.Builder
+				state := "trusted"
+				if trust.Pinned == "" {
+					state = "unpinned"
+				} else if trust.Pinned != trust.Hash {
+					state = "changed since approval"
+				}
+				fmt.Fprintf(&text, "Recipient trust: %s\n", state)
+				if trust.Pinned != "" {
+					fmt.Fprintf(&text, "Approval source: %s\n", trust.Source)
+				}
+				text.WriteString("\nCurrent [recipients] lists:\n")
+				text.WriteString(strings.Join(trust.Lists, "\n") + "\n")
+				if trust.Pinned != "" && trust.Pinned != trust.Hash {
+					text.WriteString("\nChanges since approval:\n" + strings.Join(trust.Details, "\n") + "\n")
+				}
+				_, err := fmt.Fprint(out, text.String())
 				return err
 			}
 			if trust.Pinned == trust.Hash {
@@ -53,7 +73,9 @@ func newTrustCommand(options *globalOptions) *cobra.Command {
 			return err
 		},
 	}
-	trust.Flags().BoolVar(&show, "show", false, "print the hash of the current lists, pin nothing")
+	trust.Flags().BoolVar(&show, "show", false, "show current recipients, trust status and changes without approving")
+	trust.Flags().BoolVar(&hash, "hash", false, "print the hash of the current recipient lists without approving")
+	trust.MarkFlagsMutuallyExclusive("show", "hash")
 
 	return trust
 }

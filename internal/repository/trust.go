@@ -27,6 +27,7 @@ type Trust struct {
 	Hash    string   // The hash of the current lists.
 	Pinned  string   // The pinned hash, or "" when nothing is pinned.
 	Source  string   // Where Pinned comes from, for messages.
+	Lists   []string // The current recipient lists, formatted for display.
 	Details []string // The current lists without a pin, or how they differ from it.
 	root    string
 }
@@ -51,7 +52,7 @@ func RecipientTrust(directory string) (Trust, error) {
 }
 
 func recipientTrust(root string, lists recipientLists) (Trust, error) {
-	trust := Trust{Hash: trustHash(lists), root: root}
+	trust := Trust{Hash: trustHash(lists), Lists: describeLists(lists), root: root}
 	var err error
 	switch trust.Pinned, trust.Source, err = pinnedTrust(root); {
 	case err != nil || trust.Pinned == trust.Hash:

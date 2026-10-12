@@ -31,7 +31,7 @@ func TestTeamWorkflow(t *testing.T) {
 	if output := mustCommand(t, directory, "status", "-z"); output != "U. config/credentials.yaml\x00U. secret.env\x00" {
 		t.Fatalf("NUL status: %q", output)
 	}
-	mustCommand(t, directory, "install", "--mode=always-lock")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock")
 	runGit(t, directory, "add", "-A")
 	runGit(t, directory, "commit", "-qm", "initial secrets")
 	secret := runGit(t, directory, "show", "HEAD:secret.env")
@@ -77,12 +77,12 @@ func TestTeamWorkflow(t *testing.T) {
 	if status := string(runGit(t, directory, "-c", "age.keyFile=", "status", "--porcelain", "--", "secret.env")); status != " M secret.env\n" {
 		t.Fatalf("identity-free status: %q", status)
 	}
-	mustCommand(t, directory, "install", "--mode=always-lock", "--no-filter")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock", "--no-filter")
 	forget()
 	if status := string(runGit(t, directory, "status", "--porcelain", "--", "secret.env")); status != " M secret.env\n" {
 		t.Fatalf("disabled-filter status: %q", status)
 	}
-	mustCommand(t, directory, "install", "--mode=always-lock")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock")
 	mustCommand(t, directory, "lock")
 	clean()
 	mustCommand(t, directory, "unlock")
@@ -133,7 +133,7 @@ func TestTeamWorkflow(t *testing.T) {
 	if !strings.Contains(dry, "would remove git-age post-checkout hook") {
 		t.Fatalf("disable dry run: %s", dry)
 	}
-	mustCommand(t, directory, "install", "--mode=always-lock", "--no-diff", "--no-merge", "--no-filter")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock", "--no-diff", "--no-merge", "--no-filter")
 	if output := runGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env"); !bytes.HasPrefix(output, []byte("age-encryption.org/v1\n")) {
 		t.Fatalf("disabled diff decrypted: %s", output)
 	}
@@ -146,14 +146,14 @@ func TestTeamWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, hooks, "post-checkout", "#!/bin/sh\n")
-	mustCommand(t, directory, "install", "--mode=always-lock", "--no-diff", "--no-merge", "--no-filter")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock", "--no-diff", "--no-merge", "--no-filter")
 	if string(readFile(t, hooks, "post-checkout")) != "#!/bin/sh\n" {
 		t.Fatal("disabled install removed unmanaged hook")
 	}
 	if err := os.Remove(filepath.Join(hooks, "post-checkout")); err != nil {
 		t.Fatal(err)
 	}
-	mustCommand(t, directory, "install", "--mode=always-lock")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock")
 	writeFile(t, hooks, "post-rewrite", "#!/bin/sh\n")
 	if err := os.Chmod(filepath.Join(hooks, "post-rewrite"), 0755); err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestTeamWorkflow(t *testing.T) {
 	if err := os.Remove(filepath.Join(hooks, "post-rewrite")); err != nil {
 		t.Fatal(err)
 	}
-	mustCommand(t, directory, "install", "--mode=always-lock")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock")
 	if got := string(runGit(t, directory, "cat-file", "--textconv", "HEAD:secret.env")); got != "API_TOKEN=rotated\n" {
 		t.Fatalf("reinstall did not restore readable diffs: %q", got)
 	}

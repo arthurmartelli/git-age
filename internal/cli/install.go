@@ -20,11 +20,11 @@ func newInstallCommand(global *globalOptions) *cobra.Command {
 		},
 	}
 
-	install.Flags().Func("mode", "pre-commit policy: "+strings.Join(repository.HookModes, ", "), func(value string) error {
+	install.Flags().Func("hook-mode", "pre-commit policy: "+strings.Join(repository.HookModes, ", "), func(value string) error {
 		options.Mode = value
 		return repository.ValidateHookMode(value)
 	})
-	install.RegisterFlagCompletionFunc("mode", cobra.FixedCompletions(repository.HookModes, cobra.ShellCompDirectiveNoFileComp))
+	install.RegisterFlagCompletionFunc("hook-mode", cobra.FixedCompletions(repository.HookModes, cobra.ShellCompDirectiveNoFileComp))
 
 	unlockAfterCommit := func(enabled bool) { options.UnlockAfterCommit = &enabled }
 	boolFlag(install.Flags(), "unlock-after-commit", "unlock protected files after a successful commit", unlockAfterCommit, false)

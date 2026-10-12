@@ -187,8 +187,19 @@ func TestStatusAndUnlockWithoutAccess(t *testing.T) {
 	if got, err := runCommand(directory, "-v", "status"); err != nil || !strings.Contains(got, "encrypted to .gitage [recipients] + prod/.gitage [recipients]\n") {
 		t.Fatalf("status -v: %q, %v", got, err)
 	}
-	output, err := runCommand(directory, "unlock")
-	if err != nil || !strings.Contains(output, "left 1 file(s) locked that are not encrypted to you") {
+	before := installSnapshot(t, directory)
+	output, err := runCommand(directory, "unlock", "-n")
+	if err != nil || output != "git-age: Would unlock 1 file; skipped 1 without access.\n" {
+		t.Fatalf("unlock dry run: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	output, err = runCommand(directory, "unlock", "-n", "-v")
+	if err != nil || !strings.Contains(output, "skipped, not encrypted to you: app.env\n") || strings.Contains(output, "would unlock: app.env") || !strings.Contains(output, "would unlock: prod/db.env\n") {
+		t.Fatalf("verbose unlock dry run: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	output, err = runCommand(directory, "unlock")
+	if err != nil || output != "git-age: Unlocked 1 file; skipped 1 without access.\n" {
 		t.Fatalf("unlock: %q, %v", output, err)
 	}
 	if string(readFile(t, directory, "prod/db.env")) != "db" || !strings.HasPrefix(string(readFile(t, directory, "app.env")), "age-encryption.org/v1\n") {

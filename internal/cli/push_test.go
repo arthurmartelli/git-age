@@ -35,7 +35,7 @@ func TestPrePushGitHook(t *testing.T) {
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, directory, "init", "--bare", "-q", remote)
 	runGit(t, directory, "remote", "add", "origin", remote)
-	if _, err := runCommand(directory, "install", "--mode", "always-lock"); err != nil {
+	if _, err := runCommand(directory, "install", "--hook-mode", "always-lock"); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, directory, "push", "-q", "origin", "HEAD:refs/heads/main")

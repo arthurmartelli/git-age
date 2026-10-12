@@ -35,7 +35,7 @@ func TestInteractiveCommit(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			isolateHookEnvironment(t)
 			directory, identity, _ := cleanFixture(t, []byte("original\n"), false)
-			mustCommand(t, directory, "install", "--mode=interactive")
+			mustCommand(t, directory, "install", "--hook-mode=interactive")
 			writeFile(t, directory, "secret.env", "changed\n")
 			runGit(t, directory, "add", "secret.env")
 			head := gitRevision(t, directory, "HEAD")

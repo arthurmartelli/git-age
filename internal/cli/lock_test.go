@@ -63,16 +63,36 @@ func TestLock(t *testing.T) {
 	}
 }
 
-func TestLockDryRun(t *testing.T) {
+func TestLockDryRunAndSummaries(t *testing.T) {
 	directory := t.TempDir()
-	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AGE_KEY_FILE", "")
+	t.Setenv("GIT_AGE_RECIPIENT", "")
+	identity := newIdentity(t)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
 	writeFile(t, directory, "a.env", "secret")
+	writeFile(t, directory, "b.env", string(encryptFixture(t, identity.Recipient(), "other", false)))
+	before := installSnapshot(t, directory)
 	output, err := runCommand(directory, "lock", "-n")
-	if err != nil || output != "would lock: a.env\n" {
+	if err != nil || output != "git-age: Would lock 1 file; 1 already locked.\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
 	}
-	if content, _ := os.ReadFile(filepath.Join(directory, "a.env")); string(content) != "secret" {
-		t.Fatal("dry run changed file")
+	assertSnapshotUnchanged(t, directory, before)
+	output, err = runCommand(directory, "lock", "-n", "-v")
+	if err != nil || !strings.Contains(output, "would lock: a.env\n") || !strings.Contains(output, "already locked: b.env\n") {
+		t.Fatalf("verbose dry run: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	output, err = runCommand(directory, "lock")
+	if err != nil || output != "git-age: Locked 1 file; 1 already locked.\n" {
+		t.Fatalf("lock summary: %q, %v", output, err)
+	}
+	assertDecrypts(t, readFile(t, directory, "a.env"), identity, []byte("secret"))
+	output, err = runCommand(directory, "unlock")
+	if err != nil || output != "git-age: Unlocked 2 files.\n" {
+		t.Fatalf("unlock summary: %q, %v", output, err)
 	}
 }
 
@@ -94,6 +114,11 @@ func TestLockInvalidRecipientsChangeNothing(t *testing.T) {
 			for _, path := range []string{"a.env", "sub/b.env"} {
 				writeFile(t, directory, path, "secret")
 			}
+			before := installSnapshot(t, directory)
+			if output, err := runCommand(directory, "lock", "-n"); err == nil || output != "" {
+				t.Fatalf("dry run missed recipient error: %q, %v", output, err)
+			}
+			assertSnapshotUnchanged(t, directory, before)
 			if _, err := runCommand(directory, "lock"); err == nil {
 				t.Fatal("expected recipient error")
 			}

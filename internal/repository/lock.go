@@ -14,17 +14,17 @@ import (
 )
 
 type encryptionOptions struct {
-	noReuse, rekey bool
-	edit           func(string) error
+	noReuse, rekey, dryRun bool
+	edit                   func(string) error
 }
 
-func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse bool) ([]ProtectedFile, error) {
-	_, noAccess, err := encryptFiles(directory, files, explicitRecipients, identityPaths, encryptionOptions{noReuse: noReuse})
+func Lock(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, noReuse, dryRun bool) ([]ProtectedFile, error) {
+	_, noAccess, err := encryptFiles(directory, files, explicitRecipients, identityPaths, encryptionOptions{noReuse: noReuse, dryRun: dryRun})
 	return noAccess, err
 }
 
-func Rekey(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string) ([]ProtectedFile, error) {
-	skipped, _, err := encryptFiles(directory, files, explicitRecipients, identityPaths, encryptionOptions{noReuse: true, rekey: true})
+func Rekey(directory string, files []ProtectedFile, explicitRecipients, identityPaths []string, dryRun bool) ([]ProtectedFile, error) {
+	skipped, _, err := encryptFiles(directory, files, explicitRecipients, identityPaths, encryptionOptions{noReuse: true, rekey: true, dryRun: dryRun})
 	return skipped, err
 }
 
@@ -107,6 +107,9 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 	}
 	if len(replacements) == 0 && len(skipped) != 0 {
 		return nil, nil, fmt.Errorf("cannot decrypt %s: no files encrypted to your identities", skipped[0].Path)
+	}
+	if options.dryRun {
+		return skipped, noAccess, nil
 	}
 	return skipped, noAccess, replaceFiles(replacements)
 }

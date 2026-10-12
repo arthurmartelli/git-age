@@ -47,7 +47,7 @@ func TestRekeyRecipientSources(t *testing.T) {
 				writeFile(t, directory, "b.env", "plaintext")
 				writeFile(t, directory, "public.txt", "untouched")
 				output, err := runCommand(directory, "rekey", args...)
-				if err != nil || output != "" {
+				if err != nil || output != "git-age: Re-encrypted 2 files.\n" {
 					t.Fatalf("rekey: %q, %v", output, err)
 				}
 				after := readFile(t, directory, "a.env")
@@ -127,7 +127,7 @@ func TestRekeyPathsAndNestedRecipients(t *testing.T) {
 				directory = alias
 			}
 			output, err := runCommand(filepath.Join(directory, "sub"), "rekey", "-v", "deep", "deep/b.env")
-			if err != nil || output != "rekeying: deep/b.env\n" {
+			if err != nil || output != "rekeying: deep/b.env\ngit-age: Re-encrypted 1 file.\n" {
 				t.Fatalf("rekey subdirectory: %q, %v", output, err)
 			}
 			after := readFile(t, directory, "sub/deep/b.env")
@@ -212,8 +212,19 @@ func TestRekeyLimitedAccess(t *testing.T) {
 	app := encryptFixture(t, alice.Recipient(), "app", false)
 	writeFile(t, directory, "app.env", string(app))
 	writeFile(t, directory, "prod/db.env", string(encryptFixture(t, carol.Recipient(), "db", false)))
-	output, err := runCommand(directory, "rekey", "-v")
-	if err != nil || !strings.Contains(output, "skipping app.env: not encrypted to you") || !strings.Contains(output, "rekeying: prod/db.env") || strings.Contains(output, "rekeying: app.env") {
+	before := installSnapshot(t, directory)
+	output, err := runCommand(directory, "rekey", "-n")
+	if err != nil || output != "git-age: Would re-encrypt 1 file; skipped 1 without access.\n" {
+		t.Fatalf("limited-access dry run: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	output, err = runCommand(directory, "rekey", "-n", "-v")
+	if err != nil || !strings.Contains(output, "skipped, not encrypted to you: app.env\n") || strings.Contains(output, "would rekey: app.env") || !strings.Contains(output, "would rekey: prod/db.env\n") {
+		t.Fatalf("verbose limited-access dry run: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
+	output, err = runCommand(directory, "rekey", "-v")
+	if err != nil || !strings.Contains(output, "skipped, not encrypted to you: app.env") || !strings.Contains(output, "rekeying: prod/db.env") || strings.Contains(output, "rekeying: app.env") {
 		t.Fatalf("limited access: %q, %v", output, err)
 	}
 	if !bytes.Equal(app, readFile(t, directory, "app.env")) {
@@ -225,6 +236,11 @@ func TestRekeyLimitedAccess(t *testing.T) {
 	// Loss of expected access may indicate tampering, so it must stop the batch.
 	writeFile(t, directory, "prod/db.env", string(encryptFixture(t, alice.Recipient(), "tampered", false)))
 	writeFile(t, directory, "a.env", "plaintext")
+	before = installSnapshot(t, directory)
+	if output, err := runCommand(directory, "rekey", "-n"); err == nil || !strings.Contains(err.Error(), "cannot decrypt prod/db.env") || output != "" {
+		t.Fatalf("dry run missed decryption failure: %q, %v", output, err)
+	}
+	assertSnapshotUnchanged(t, directory, before)
 	if _, err := runCommand(directory, "rekey"); err == nil || !strings.Contains(err.Error(), "cannot decrypt prod/db.env") {
 		t.Fatalf("expected decryption error: %v", err)
 	}
@@ -238,20 +254,25 @@ func TestRekeyLimitedAccess(t *testing.T) {
 
 func TestRekeyDryRun(t *testing.T) {
 	directory := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_AGE_KEY_FILE", "")
+	t.Setenv("GIT_AGE_RECIPIENT", "")
+	identity := newIdentity(t)
 	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
-	originals := map[string]string{"a.env": "plaintext", "b.env": "age-encryption.org/v1\n"}
-	for path, content := range originals {
-		writeFile(t, directory, path, content)
-	}
-	output, err := runCommand(directory, "rekey", "-n", "-i", "missing.key")
-	if err != nil || output != "would rekey: a.env\nwould rekey: b.env\n" {
+	writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+	writeFile(t, directory, "a.env", "plaintext")
+	writeFile(t, directory, "b.env", string(encryptFixture(t, identity.Recipient(), "secret", false)))
+	before := installSnapshot(t, directory)
+	output, err := runCommand(directory, "rekey", "-n")
+	if err != nil || output != "git-age: Would re-encrypt 2 files.\n" {
 		t.Fatalf("dry run: %q, %v", output, err)
 	}
-	for path, before := range originals {
-		if string(readFile(t, directory, path)) != before {
-			t.Fatalf("dry run changed %s", path)
-		}
+	assertSnapshotUnchanged(t, directory, before)
+	if output, err := runCommand(directory, "rekey", "-n", "-i", "missing.key"); err == nil || output != "" {
+		t.Fatalf("missing identity: %q, %v", output, err)
 	}
+	assertSnapshotUnchanged(t, directory, before)
 }
 
 func TestRekeyOutsideGit(t *testing.T) {
@@ -320,7 +341,7 @@ func TestRekeyPlaintextNeedsNoIdentity(t *testing.T) {
 	t.Setenv("GIT_AGE_RECIPIENT", "")
 	identity := newIdentity(t)
 	writeFile(t, directory, ".gitage", "[files]\n*.env\n")
-	if output, err := runCommand(directory, "rekey", "-i", "missing.key"); err != nil || output != "" {
+	if output, err := runCommand(directory, "rekey", "-i", "missing.key"); err != nil || output != "git-age: Re-encrypted 0 files.\n" {
 		t.Fatalf("no protected files: %q, %v", output, err)
 	}
 	writeFile(t, directory, "a.env", "plaintext")

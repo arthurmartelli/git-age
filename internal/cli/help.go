@@ -27,9 +27,9 @@ func newHelpCommand() *cobra.Command {
 		sections[name] = strings.TrimSpace(manual[heading[0]:end]) + "\n"
 	}
 	return &cobra.Command{
-		Use:   "help [TOPIC|COMMAND]",
+		Use:   "help [TOPIC|COMMAND ...]",
 		Short: "show the manual or a command's options",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  cobra.ArbitraryArgs,
 		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			var names []string
 			if len(args) == 0 {
@@ -41,8 +41,14 @@ func newHelpCommand() *cobra.Command {
 						names = append(names, command.Name())
 					}
 				}
-				slices.Sort(names)
+			} else if parent, rest, err := cmd.Root().Find(args); err == nil && len(rest) == 0 {
+				for _, command := range parent.Commands() {
+					if !command.Hidden {
+						names = append(names, command.Name())
+					}
+				}
 			}
+			slices.Sort(names)
 			return names, cobra.ShellCompDirectiveNoFileComp
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -50,7 +56,7 @@ func newHelpCommand() *cobra.Command {
 				_, err := io.WriteString(cmd.OutOrStdout(), manual)
 				return err
 			}
-			if section, ok := sections[args[0]]; ok {
+			if section, ok := sections[args[0]]; len(args) == 1 && ok {
 				_, err := io.WriteString(cmd.OutOrStdout(), section)
 				return err
 			}
@@ -58,7 +64,7 @@ func newHelpCommand() *cobra.Command {
 			root := cmd.Root()
 			topic, rest, err := root.Find(args)
 			if err != nil || topic == root || len(rest) != 0 {
-				return fmt.Errorf("unknown help command %q (see git-age --help)", args[0])
+				return fmt.Errorf("unknown help command %q (see git-age --help)", strings.Join(args, " "))
 			}
 
 			topic.InitDefaultHelpFlag()

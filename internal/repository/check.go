@@ -21,8 +21,25 @@ type IndexCheck struct {
 	rules        map[string][]byte
 }
 
-func CheckIndex(directory string) (IndexCheck, error) {
-	return checkIndex(directory, true)
+func CheckIndex(directory string, paths []string) (IndexCheck, error) {
+	result, err := checkIndex(directory, true)
+	if err != nil || len(paths) == 0 {
+		return result, err
+	}
+	directory, err = filepath.Abs(directory)
+	if err != nil {
+		return result, err
+	}
+	for i := range result.Files {
+		file := &result.Files[i]
+		path, err := filepath.Rel(directory, nativePath(result.root, file.Path))
+		if err != nil {
+			return result, err
+		}
+		file.Path = filepath.ToSlash(path)
+	}
+	result.Files, err = selectFiles(directory, result.Files, paths)
+	return result, err
 }
 
 func CheckCommit(directory string) (IndexCheck, error) {
@@ -32,7 +49,7 @@ func CheckCommit(directory string) (IndexCheck, error) {
 func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 	var result IndexCheck
 	// Use the Git root because staged paths are repository-relative.
-	root, err := Root(directory, "check --cached")
+	root, err := Root(directory, "check --staged")
 	if err != nil {
 		return result, err
 	}
@@ -100,7 +117,6 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 	if err != nil {
 		return result, err
 	}
-	var candidates []string
 	changed := map[string][]byte{}
 	for _, name := range bytes.Split(output, []byte{0}) {
 		path := string(name)
@@ -112,7 +128,17 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 			return result, err
 		}
 		changed[path] = content
-		candidates = append(candidates, nativePath(root, path))
+	}
+	// Public checks inspect the index snapshot; commit hooks inspect changes.
+	var candidates []string
+	if requireRules {
+		for path := range blobs {
+			candidates = append(candidates, nativePath(root, path))
+		}
+	} else {
+		for path := range changed {
+			candidates = append(candidates, nativePath(root, path))
+		}
 	}
 	result.Files, err = matchProtectedFiles(root, root, candidates, rules, ruleIgnoreCase(root, true))
 	if err != nil {
@@ -122,7 +148,14 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 	for i := range result.Files {
 		file := &result.Files[i]
 		protected[file.Path] = true
-		file.State = contentState(changed[file.Path])
+		content, ok := changed[file.Path]
+		if !ok {
+			content, err = indexGit("cat-file", "blob", blobs[file.Path])
+			if err != nil {
+				return result, err
+			}
+		}
+		file.State = contentState(content)
 	}
 	for path, content := range changed {
 		if filepath.Base(path) == ".gitage.key" || (result.HasRules && !protected[path] && bytes.Contains(content, []byte("AGE-SECRET-KEY-"))) {

@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/arthurmartelli/git-age/internal/repository"
 	"github.com/spf13/cobra"
 )
@@ -19,32 +17,15 @@ func newRekeyCommand(options *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			skipped := map[string]bool{}
-			if !options.dryRun {
-				inaccessible, err := repository.Rekey(options.directory, files, recipients, identities)
-				if err != nil {
-					return err
-				}
-				for _, file := range inaccessible {
-					skipped[file.Path] = true
-					if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: skipping %s: not encrypted to you\n", file.Path); err != nil {
-						return err
-					}
-				}
+			inaccessible, err := repository.Rekey(options.directory, files, recipients, identities, options.dryRun)
+			if err != nil {
+				return err
 			}
-			for _, file := range files {
-				if skipped[file.Path] || !options.dryRun && !options.verbose {
-					continue
-				}
-				message := "rekeying"
-				if options.dryRun {
-					message = "would rekey"
-				}
-				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s: %s\n", message, file.Path); err != nil {
-					return err
-				}
+			skipped := map[string]string{}
+			for _, file := range inaccessible {
+				skipped[file.Path] = "not encrypted to you"
 			}
-			return nil
+			return reportFiles(cmd, options, files, "", "rekey", skipped)
 		},
 	}
 	recipientFlags(rekey.Flags(), &recipients)

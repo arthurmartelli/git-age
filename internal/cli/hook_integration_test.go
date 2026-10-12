@@ -24,7 +24,7 @@ func TestHookCommitRefusals(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			isolateHookEnvironment(t)
 			directory, identity, ciphertext := cleanFixture(t, []byte("original\n"), false)
-			mustCommand(t, directory, "install", "--mode=always-lock")
+			mustCommand(t, directory, "install", "--hook-mode=always-lock")
 			diagnostic := ""
 			switch scenario {
 			case "abort":
@@ -76,7 +76,7 @@ func TestHookRuleRemovalWorkflow(t *testing.T) {
 	writeFile(t, directory, "sub/deep/.keep", "")
 	runGit(t, directory, "add", "sub")
 	runGit(t, directory, "commit", "-qm", "nested rules")
-	mustCommand(t, directory, "install", "--mode=always-lock")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock")
 	runGit(t, directory, "rm", "-q", ".gitage")
 	output := refuseGit(t, directory, "refusing to commit the removal of .gitage", "commit", "-qm", "drop rules")
 	if !bytes.Contains(output, []byte("git-age uninstall")) {
@@ -113,7 +113,7 @@ func TestHookTrustAndRecipientMerge(t *testing.T) {
 	writeFile(t, directory, "prod/.gitage", "[recipients]\n"+identity.Recipient().String()+"\n")
 	runGit(t, directory, "add", "prod/.gitage")
 	runGit(t, directory, "commit", "-qm", "unchanged nested recipients")
-	mustCommand(t, directory, "install", "--mode=always-lock")
+	mustCommand(t, directory, "install", "--hook-mode=always-lock")
 	mustCommand(t, directory, "trust")
 	other := newIdentity(t)
 	rules := "[files]\n*.env\n[recipients]\n" + identity.Recipient().String() + "\n" + other.Recipient().String() + "\n"
@@ -177,7 +177,7 @@ func TestScopedRecipientWorkflow(t *testing.T) {
 			if output := mustCommand(t, directory, "status", "--porcelain"); output != "LN app.env\nL. prod/db.env\n" {
 				t.Fatalf("limited access: %q", output)
 			}
-			if output := mustCommand(t, directory, "unlock"); !strings.Contains(output, "1 file(s) locked that are not encrypted to you") {
+			if output := mustCommand(t, directory, "unlock"); !strings.Contains(output, "skipped 1 without access") {
 				t.Fatalf("missing skip warning: %s", output)
 			}
 			if string(readFile(t, directory, "prod/db.env")) != "db\n" || !bytes.Equal(app, readFile(t, directory, "app.env")) {
@@ -203,6 +203,11 @@ func TestScopedRecipientWorkflow(t *testing.T) {
 				t.Fatalf("nested staleness: %q", got)
 			}
 			t.Setenv("GIT_AGE_KEY_FILE", daveKey)
+			before := installSnapshot(t, directory)
+			if output := mustCommand(t, directory, "unlock", "-n", "-v"); !strings.Contains(output, "skipped, not re-encrypted to you yet: prod/db.env") || strings.Contains(output, "would unlock: prod/db.env") || !strings.Contains(output, "skipped 1 awaiting rekey") {
+				t.Fatalf("stale unlock preview: %s", output)
+			}
+			assertSnapshotUnchanged(t, directory, before)
 			if output := mustCommand(t, directory, "unlock"); !strings.Contains(output, "not re-encrypted to you yet") {
 				t.Fatalf("new recipient warning: %s", output)
 			}
@@ -210,7 +215,7 @@ func TestScopedRecipientWorkflow(t *testing.T) {
 				t.Fatal("stale unlock changed files")
 			}
 			t.Setenv("GIT_AGE_KEY_FILE", aliceKey)
-			mustCommand(t, directory, "install", "--mode=always-lock")
+			mustCommand(t, directory, "install", "--hook-mode=always-lock")
 			runGit(t, directory, "add", "prod/.gitage")
 			refuseGit(t, directory, "prod/db.env", "commit", "-qm", "add dave before rekey")
 			t.Setenv("GIT_AGE_KEY_FILE", carolKey)
@@ -320,7 +325,7 @@ func TestHookInteractiveWithoutTerminal(t *testing.T) {
 	buildGitAge(t)
 	isolateHookEnvironment(t)
 	directory, _, _ := cleanFixture(t, []byte("original\n"), false)
-	mustCommand(t, directory, "install", "--mode=interactive")
+	mustCommand(t, directory, "install", "--hook-mode=interactive")
 	writeFile(t, directory, "secret.env", "changed\n")
 	runGit(t, directory, "add", "secret.env")
 	head := gitRevision(t, directory, "HEAD")
