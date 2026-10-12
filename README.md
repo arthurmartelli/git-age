@@ -14,7 +14,7 @@ Download a prebuilt executable for Linux, macOS or Windows from the [releases pa
 
 Release files are named `git-age_<tag>_<os>_<arch>`, with `.exe` on Windows. macOS files use `darwin` for `<os>`, such as `git-age_v1.0.0_darwin_arm64`.
 
-Or install with Go 1.25+:
+Or install with Go 1.26+:
 
 ```sh
 CGO_ENABLED=0 go install github.com/arthurmartelli/git-age/cmd/git-age@latest
@@ -99,7 +99,7 @@ go test ./...
 
 Go tests cover command handlers and integration workflows with real Git hooks, filters, diffs, merges, pushes, interactive commits and history rewrites in temporary repositories. They also check file metadata, compatibility with the age CLI, and static linking on Linux. The tests isolate their Git configuration and keys.
 
-Tests require Go 1.25+, Git, Bash, `age` and `age-keygen`. Unix interactive tests require `script` and fail if it is missing. Linux metadata tests use `acl` and `attr`; macOS and Windows use their built-in metadata tools. Metadata checks skip when the filesystem lacks support. Install zsh and fish to run their completion tests too. CI runs the suite on Linux, macOS and Windows.
+Tests require Go 1.26+, Git, Bash, `age` and `age-keygen`. Unix interactive tests require `script` and fail if it is missing. Linux metadata tests use `acl` and `attr`; macOS and Windows use their built-in metadata tools. Metadata checks skip when the filesystem lacks support. Install zsh and fish to run their completion tests too. CI runs the suite on Linux, macOS and Windows.
 
 ## License
 

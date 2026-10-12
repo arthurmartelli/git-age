@@ -10,7 +10,7 @@ services:
   dev:
     build:
       dockerfile_inline: |
-        FROM golang:1.25
+        FROM golang:1.26
         RUN apt-get update -qq \
          && apt-get install -y -qq --no-install-recommends age zsh fish acl attr \
          && rm -rf /var/lib/apt/lists/* \

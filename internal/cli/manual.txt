@@ -1123,7 +1123,7 @@ DEPENDENCIES
 git-age is a single executable with age built in. Git is its only
 runtime dependency.
 
-Building from source requires Go 1.25+.
+Building from source requires Go 1.26+.
 
 Outside a Git repository, `lock`, `unlock` and `status` still work, but
 existing Git ciphertext cannot be reused.
