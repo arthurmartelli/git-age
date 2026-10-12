@@ -138,9 +138,7 @@ func TestProtectedIdentityRefusalChangesNothing(t *testing.T) {
 			if code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), diagnostic) || !strings.Contains(stderr.String(), "protected.key") {
 				t.Fatalf("protected identity: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
 			}
-			if !reflect.DeepEqual(before, installSnapshot(t, directory)) {
-				t.Fatal("rejected identity changed files")
-			}
+			assertSnapshotUnchanged(t, directory, before)
 		})
 	}
 }

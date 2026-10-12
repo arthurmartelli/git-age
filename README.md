@@ -85,12 +85,11 @@ Shell completion for bash, zsh and fish: `git-age completion SHELL`.
 
 ```sh
 go test ./...
-./test.sh
 ```
 
-Go tests cover migrated command handlers directly and verify that the Linux binary is static. The shell script builds the Go binary and runs the end-to-end tests in throwaway repositories. It never touches your keys, config or hooks.
+Go tests cover command handlers and integration workflows with real Git hooks, filters, diffs, merges, pushes, interactive commits and history rewrites in temporary repositories. They also check file metadata, compatibility with the age CLI, and static linking on Linux. The tests isolate their Git configuration and keys.
 
-Tests require Go 1.25+, Bash, Git, `age`, `age-keygen` and Perl. Set `GIT_AGE=/absolute/path/to/git-age` to test an existing executable without rebuilding.
+Tests require Go 1.25+, Git, Bash, `age` and `age-keygen`. Unix interactive tests use `script`. Linux metadata tests use `acl` and `attr`; macOS and Windows use their built-in metadata tools. Metadata checks skip when the filesystem lacks support. Install zsh and fish to run their completion tests too. CI runs the suite on Linux, macOS and Windows.
 
 ## License
 

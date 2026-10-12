@@ -326,6 +326,13 @@ func TestMergeGitDriver(t *testing.T) {
 				if err == nil || !strings.Contains(string(output), "Refusing to stage it as plaintext") || len(runGit(t, directory, "ls-files", "-u")) == 0 {
 					t.Fatalf("failed staging: %v, %s", err, output)
 				}
+				if scenario == "rebase" {
+					head := gitRevision(t, directory, "HEAD")
+					refuseGit(t, directory, "secret.env", "rebase", "--continue")
+					if gitRevision(t, directory, "HEAD") != head || len(runGit(t, directory, "ls-files", "-u")) == 0 {
+						t.Fatal("failed rebase continuation committed plaintext")
+					}
+				}
 				runGit(t, directory, "config", "--unset", "age.trustedRecipients")
 				runGit(t, directory, "add", "secret.env")
 				assertDecrypts(t, runGit(t, directory, "show", ":secret.env"), identity, []byte("resolved\n"))

@@ -6,11 +6,100 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
 )
+
+// buildGitAge puts the real executable on PATH so installed Git hooks and
+// drivers exercise the same entrypoint users run.
+func buildGitAge(t *testing.T) string {
+	t.Helper()
+	bin := t.TempDir()
+	name := "git-age"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(bin, name)
+	build := exec.Command("go", "build", "-o", path, "./cmd/git-age")
+	build.Dir = "../.."
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, output)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return path
+}
+
+func mustCommand(t *testing.T, directory, command string, args ...string) string {
+	t.Helper()
+	output, err := runCommand(directory, command, args...)
+	if err != nil {
+		t.Fatalf("%s %v: %v\n%s", command, args, err, output)
+	}
+	return output
+}
+
+func refuseGit(t *testing.T, directory, diagnostic string, args ...string) []byte {
+	t.Helper()
+	output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput()
+	if err == nil || !bytes.Contains(output, []byte(diagnostic)) {
+		t.Fatalf("git %v: %v, %s; want refusal containing %q", args, err, output, diagnostic)
+	}
+	return output
+}
+
+func gitRevision(t *testing.T, directory, revision string) string {
+	t.Helper()
+	return strings.TrimSpace(string(runGit(t, directory, "rev-parse", revision)))
+}
+
+func assertCannotDecrypt(t *testing.T, ciphertext []byte, identity age.Identity) {
+	t.Helper()
+	if _, err := age.Decrypt(bytes.NewReader(ciphertext), identity); err == nil {
+		t.Fatal("excluded recipient can decrypt")
+	}
+}
+
+func assertSnapshotUnchanged(t *testing.T, directory string, before map[string]string) {
+	t.Helper()
+	after := installSnapshot(t, directory)
+	changed := false
+	for path, old := range before {
+		name, err := filepath.Rel(directory, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, exists := after[path]
+		if !exists {
+			t.Errorf("removed %s", name)
+			changed = true
+			continue
+		}
+		if current != old {
+			oldMode, oldContent, _ := strings.Cut(old, "\n")
+			newMode, newContent, _ := strings.Cut(current, "\n")
+			t.Errorf("changed %s: mode %s -> %s, content changed: %t", name, oldMode, newMode, oldContent != newContent)
+			changed = true
+		}
+	}
+	for path, current := range after {
+		if _, exists := before[path]; !exists {
+			name, err := filepath.Rel(directory, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mode, _, _ := strings.Cut(current, "\n")
+			t.Errorf("added %s: mode %s", name, mode)
+			changed = true
+		}
+	}
+	if changed {
+		t.FailNow()
+	}
+}
 
 // runCommand runs a git-age command in directory, combining its output.
 func runCommand(directory, command string, args ...string) (string, error) {

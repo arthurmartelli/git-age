@@ -67,6 +67,13 @@ printf '%s\n' "${COMPREPLY[@]}"`
 						t.Errorf("%v: output %q, error %v", test.words, output, err)
 					}
 				}
+				for _, words := range [][]string{{"git-age", ""}, {"git", "age", ""}} {
+					output, err := exec.Command(shell, append([]string{"-c", program, "bash", path}, words...)...).Output()
+					if err != nil {
+						t.Fatal(err)
+					}
+					assertDocumentedCommands(t, strings.Fields(string(output)))
+				}
 			case "zsh":
 				program := `compdef() { :; }
 source "$1"; shift
@@ -107,6 +114,16 @@ words=(git status) CURRENT=2
 					t.Fatalf("existing Git completer after reloading: %v\n%s", err, output)
 				}
 			case "fish":
+				output, err := exec.Command(shell, "--no-config", "-c", `source $argv[1]; complete -C 'git-age '`, path).CombinedOutput()
+				if err != nil {
+					t.Fatalf("fish commands: %v\n%s", err, output)
+				}
+				var commands []string
+				for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+					command, _, _ := strings.Cut(line, "\t")
+					commands = append(commands, command)
+				}
+				assertDocumentedCommands(t, commands)
 				for _, request := range []string{
 					"git-age install --mode=al", "git age install --mode=al",
 					`git -C "directory with spaces" age install --mode=al`,
@@ -128,7 +145,21 @@ func TestCompletionCommands(t *testing.T) {
 		t.Fatalf("complete: exit %d, %s", code, &stderr)
 	}
 	commands := strings.Fields(output.String())
+	assertDocumentedCommands(t, commands)
+	for _, args := range [][]string{{}, {"tcsh"}, {"bash", "extra"}} {
+		output.Reset()
+		stderr.Reset()
+		if code := Run(append([]string{"completion"}, args...), &output, &stderr); code != 2 || output.Len() != 0 {
+			t.Errorf("args %v: exit %d, output %q, stderr %q", args, code, &output, &stderr)
+		}
+	}
+}
+
+func assertDocumentedCommands(t *testing.T, commands []string) {
+	t.Helper()
+	lock := false
 	for _, command := range commands {
+		lock = lock || command == "lock"
 		if command == ":4" {
 			continue
 		}
@@ -136,11 +167,7 @@ func TestCompletionCommands(t *testing.T) {
 			t.Errorf("undocumented completion: %s", command)
 		}
 	}
-	for _, args := range [][]string{{}, {"tcsh"}, {"bash", "extra"}} {
-		output.Reset()
-		stderr.Reset()
-		if code := Run(append([]string{"completion"}, args...), &output, &stderr); code != 2 || output.Len() != 0 {
-			t.Errorf("args %v: exit %d, output %q, stderr %q", args, code, &output, &stderr)
-		}
+	if !lock {
+		t.Errorf("completion did not offer lock: %v", commands)
 	}
 }

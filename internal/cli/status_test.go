@@ -216,3 +216,22 @@ func TestStatusStaleRecipients(t *testing.T) {
 		t.Fatalf("status: %q, %v", got, err)
 	}
 }
+
+func TestStatusGitPatternWorkflow(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	t.Setenv("GIT_AGE_KEY_FILE", "")
+	writeFile(t, directory, ".gitage", "[files]\n*.env\nsecrets/**\n!public.txt\n")
+	for _, path := range []string{"secrets/a.txt", "secrets/public.txt", "secrets/deep/public.txt", "PROD.ENV"} {
+		writeFile(t, directory, path, "x\n")
+	}
+	for _, test := range []struct{ ignoreCase, want string }{
+		{"false", "U. secrets/a.txt\nU. secrets/deep/public.txt\n"},
+		{"true", "U. PROD.ENV\nU. secrets/a.txt\nU. secrets/deep/public.txt\n"},
+	} {
+		runGit(t, directory, "config", "core.ignoreCase", test.ignoreCase)
+		if got := mustCommand(t, directory, "status", "--porcelain"); got != test.want {
+			t.Fatalf("ignoreCase=%s: %q, want %q", test.ignoreCase, got, test.want)
+		}
+	}
+}

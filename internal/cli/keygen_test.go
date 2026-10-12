@@ -198,3 +198,23 @@ func initKeygenRepo(t *testing.T, directory string) {
 		t.Fatalf("git init: %v\n%s", err, output)
 	}
 }
+
+func TestKeygenKeepsExistingExclusion(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	mustCommand(t, directory, "keygen")
+	exclude := installGitPath(t, directory, "info/exclude")
+	before, err := os.ReadFile(exclude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(directory, ".gitage.key")); err != nil {
+		t.Fatal(err)
+	}
+	mustCommand(t, directory, "keygen")
+	after, err := os.ReadFile(exclude)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("repeated keygen changed exclusion: %v, %q", err, after)
+	}
+	runGit(t, directory, "check-ignore", "-q", ".gitage.key")
+}
