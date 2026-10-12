@@ -631,6 +631,13 @@ when it decrypts to the same contents.
 
 This requires access to an appropriate identity.
 
+Reuse also works with `-r`, GIT_AGE_RECIPIENT and age.recipient.
+git-age records a recipient fingerprint for ciphertext it creates under
+`.git/git-age/recipients`. These local records contain hashes, not keys
+or plaintext, and let Git's clean filter verify the current recipients.
+Without a record, externally configured recipients require fresh
+encryption once before their ciphertext can be reused.
+
 Ciphertext is not reused after the recipient list changes.
 
 If recipients were changed through:

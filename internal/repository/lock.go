@@ -98,7 +98,7 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 				continue
 			}
 		}
-		encrypted, err := keys.encrypt(root, path, target, plaintext, inGit && !options.noReuse)
+		encrypted, err := keys.encrypt(root, path, target, plaintext, inGit && !options.noReuse, inGit && !options.dryRun)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -330,13 +330,20 @@ func (k keys) listedRecipients() ([]string, error) {
 }
 
 // encrypt reuses unchanged ciphertext from Git when reuse is allowed.
-func (k keys) encrypt(root, path string, target fileTarget, plaintext []byte, reuse bool) ([]byte, error) {
-	if reuse && !k.external {
-		if ciphertext := reusableCiphertext(root, path, target.rules, plaintext, k.identities); ciphertext != nil {
+func (k keys) encrypt(root, path string, target fileTarget, plaintext []byte, reuse, remember bool) ([]byte, error) {
+	if reuse {
+		if ciphertext := k.reusableCiphertext(root, path, target, plaintext); ciphertext != nil {
 			return ciphertext, nil
 		}
 	}
-	return encryptContent(plaintext, target.recipients)
+	ciphertext, err := encryptContent(plaintext, target.recipients)
+	if err != nil || !remember {
+		return ciphertext, err
+	}
+	if err := k.rememberCiphertext(root, target, ciphertext); err != nil {
+		return nil, err
+	}
+	return ciphertext, nil
 }
 
 // ruleRecipients reads a rule file from rules, or from disk when rules is nil.
@@ -417,16 +424,62 @@ func parseRecipients(values []string) ([]age.Recipient, error) {
 	return recipients, nil
 }
 
-func reusableCiphertext(root, path string, rules []string, plaintext []byte, identities []age.Identity) []byte {
-	if len(identities) == 0 {
+func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext []byte) []byte {
+	if len(k.identities) == 0 {
 		// Reuse needs decryption; avoid spawning Git when no identity can decrypt.
 		return nil
 	}
-	relative, _ := filepath.Rel(root, path)
-	// Even staged ciphertext may still use old recipients after a rules edit.
-	if !rulesMatchRevision(root, rules, "HEAD") {
+	cache, err := gitPath(root, "git-age/recipients")
+	if err != nil {
 		return nil
 	}
+	fingerprint := k.recipientFingerprint(target)
+	relative, _ := filepath.Rel(root, path)
+	var stale [][]byte
+	var checkedLegacy, legacy bool
+	for _, revision := range []string{"", ":2", ":3", "HEAD"} {
+		ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative))
+		if err != nil {
+			continue
+		}
+		recorded, err := os.ReadFile(filepath.Join(cache, ciphertextHash(ciphertext)))
+		if err == nil {
+			exact, fallback, _ := strings.Cut(string(recorded), "\n")
+			if exact != fingerprint && (!k.toIdentities || fallback == "" || fallback != recipientSetFingerprint(target.listed)) {
+				continue
+			}
+		} else {
+			if !errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			// Older ciphertext has no local provenance. Only rule-based keys
+			// have recipient history in Git that can justify reusing it.
+			if !checkedLegacy {
+				checkedLegacy = true
+				legacy = !k.external && rulesMatchRevision(root, target.rules, "HEAD")
+				if legacy {
+					stale, legacy = staleCiphertexts(root, path, target.rules)
+				}
+			}
+			// Conflict sides use the same staged rules as a stage-zero candidate.
+			ruleRevision := revision
+			if strings.HasPrefix(revision, ":") {
+				ruleRevision = ""
+			}
+			if !legacy || !rulesMatchRevision(root, target.rules, ruleRevision) || slices.ContainsFunc(stale, func(old []byte) bool { return bytes.Equal(old, ciphertext) }) {
+				continue
+			}
+		}
+		decrypted, err := decryptContent(ciphertext, k.identities)
+		if err == nil && bytes.Equal(decrypted, plaintext) {
+			return ciphertext
+		}
+	}
+	return nil
+}
+
+func staleCiphertexts(root, path string, rules []string) ([][]byte, bool) {
+	relative, _ := filepath.Rel(root, path)
 	var stale [][]byte
 	for _, rule := range rules {
 		current, err := os.ReadFile(rule)
@@ -435,21 +488,21 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 		}
 		_, currentRecipients, err := parseRules(rule, current)
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		rulePath, _ := filepath.Rel(root, rule)
 		history, err := git(root, "log", "--format=%H", "--", filepath.ToSlash(rulePath))
 		if err != nil {
-			return nil
+			return nil, false
 		}
 		for _, revision := range strings.Fields(string(history)) {
 			old, err := git(root, "show", revision+":"+filepath.ToSlash(rulePath))
 			if err != nil {
-				return nil
+				return nil, false
 			}
 			_, oldRecipients, err := parseRules(rule, old)
 			if err != nil {
-				return nil
+				return nil, false
 			}
 			if sameRecipients(currentRecipients, oldRecipients) {
 				continue
@@ -460,25 +513,7 @@ func reusableCiphertext(root, path string, rules []string, plaintext []byte, ide
 			break
 		}
 	}
-	for _, revision := range []string{"", ":2", ":3", "HEAD"} {
-		// Conflict sides use the same staged rules as a stage-zero candidate.
-		ruleRevision := revision
-		if strings.HasPrefix(revision, ":") {
-			ruleRevision = ""
-		}
-		if !rulesMatchRevision(root, rules, ruleRevision) {
-			continue
-		}
-		ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative))
-		if err != nil || slices.ContainsFunc(stale, func(old []byte) bool { return bytes.Equal(old, ciphertext) }) {
-			continue
-		}
-		decrypted, err := decryptContent(ciphertext, identities)
-		if err == nil && bytes.Equal(decrypted, plaintext) {
-			return ciphertext
-		}
-	}
-	return nil
+	return stale, true
 }
 
 // rulesMatchRevision reports whether each working rule file equals its

@@ -81,7 +81,7 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 		if err != nil {
 			return false, err
 		}
-		merged, err = keys.encrypt(root, path, target, merged, inGit)
+		merged, err = keys.encrypt(root, path, target, merged, inGit, inGit)
 		if err != nil {
 			return false, err
 		}

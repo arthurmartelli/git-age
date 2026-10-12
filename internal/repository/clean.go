@@ -54,12 +54,10 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 		if err := checkRecipientTrust(root, nil); err != nil {
 			return nil, err
 		}
-		return keys.encrypt(root, path, target, content, true)
+		return keys.encrypt(root, path, target, content, true, true)
 	}
-	if !keys.external {
-		if ciphertext := reusableCiphertext(root, path, target.rules, content, keys.identities); ciphertext != nil {
-			return ciphertext, nil
-		}
+	if ciphertext := keys.reusableCiphertext(root, path, target, content); ciphertext != nil {
+		return ciphertext, nil
 	}
 	return content, nil
 }

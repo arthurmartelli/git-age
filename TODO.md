@@ -11,7 +11,7 @@ Pending work on the Go port before merging `go-port` into `main`.
   `AGE-PLUGIN-…`) and post-quantum `age1pq1…` recipients are rejected. Use
   `filippo.io/age/plugin` and `age.ParseRecipients`. Also make "your own public
   key" detection (`identities.go:109-113`) work for these types.
-- [ ] **Reuse ciphertext when recipients come from `-r`, `GIT_AGE_RECIPIENT` or
+- [x] **Reuse ciphertext when recipients come from `-r`, `GIT_AGE_RECIPIENT` or
   `age.recipient`.** `external` disables reuse (`lock.go:154-169`, `lock.go:289`,
   `clean.go:59`), so every `lock` rewrites files, unchanged unlocked files show
   as modified, and unrelated commits re-encrypt secrets.

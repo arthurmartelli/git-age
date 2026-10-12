@@ -48,7 +48,7 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 		if err != nil {
 			return result, fmt.Errorf("%s: %w", file.Path, err)
 		}
-		ciphertext, err := keys.encrypt(root, path, target, original, workingRulesMatchIndex(target.rules, check.rules))
+		ciphertext, err := keys.encrypt(root, path, target, original, workingRulesMatchIndex(target.rules, check.rules), true)
 		if err != nil {
 			return result, err
 		}
