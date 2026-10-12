@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -66,7 +67,8 @@ func installTestPlugin(t *testing.T) {
 		name = "age-plugin-gitagetest"
 	}
 	path := filepath.Join(bin, name)
-	if err := os.Link(executable, path); err != nil {
+	// Windows can't delete a hard link to the running test binary, so copy it.
+	if runtime.GOOS == "windows" || os.Link(executable, path) != nil {
 		content, err := os.ReadFile(executable)
 		if err != nil {
 			t.Fatal(err)

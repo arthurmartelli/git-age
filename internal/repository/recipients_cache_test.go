@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -132,7 +133,12 @@ func TestRecipientCachePruningProtectedHEADPaths(t *testing.T) {
 	cacheFile(t, root, "nested/.gitage", []byte("[files]\n!*.txt\n"))
 	ciphertexts := map[string][]byte{}
 	unprotected := map[string]bool{"excluded.env": true, "nested/public.txt": true}
-	for _, path := range []string{"head.env", "excluded.env", "nested/secret\t\n.env", "nested/public.txt"} {
+	// Git quotes tabs and newlines in paths. Windows forbids them in file names.
+	special := "nested/secret\t\n.env"
+	if runtime.GOOS == "windows" {
+		special = "nested/secret  .env"
+	}
+	for _, path := range []string{"head.env", "excluded.env", special, "nested/public.txt"} {
 		ciphertexts[path] = []byte("age-encryption.org/v1\n" + path + "\n")
 		cacheFile(t, root, path, ciphertexts[path])
 	}

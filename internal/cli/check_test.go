@@ -395,14 +395,10 @@ func TestCheckPaths(t *testing.T) {
 			t.Fatalf("staged path from %s: exit %d, %s", base, code, stderr)
 		}
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relative, err := filepath.Rel(cwd, directory)
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Run from the parent: on Windows, the temp and source directories can be
+	// on different drives, with no relative path between them.
+	t.Chdir(filepath.Dir(directory))
+	relative := filepath.Join("..", filepath.Base(filepath.Dir(directory)), filepath.Base(directory))
 	if code, _, stderr := runCheck(relative, "--staged", "good.env"); code != 0 {
 		t.Fatalf("relative -C: exit %d, %s", code, stderr)
 	}
