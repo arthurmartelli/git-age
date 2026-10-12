@@ -204,16 +204,18 @@ func ValidateHookMode(mode string) error {
 func UnlockAfterCommit(directory string) (bool, error) {
 	const environment = "GIT_AGE_UNLOCK_AFTER_COMMIT"
 	value, configured := os.LookupEnv(environment)
+	source := environment
 	if !configured {
-		values, err := configValues(directory, "age.unlockAfterCommit", "--bool")
+		values, err := configValues(directory, "age.unlockAfterCommit")
 		if err != nil || len(values) == 0 {
 			return false, err
 		}
 		value = values[len(values)-1]
+		source = "git config age.unlockAfterCommit"
 	}
 	enabled, err := ParseBool(value)
 	if err != nil {
-		return false, fmt.Errorf("%w for %s", err, environment)
+		return false, fmt.Errorf("%w for %s", err, source)
 	}
 	return enabled, nil
 }

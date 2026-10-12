@@ -66,6 +66,36 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+func TestInvalidSafetyOverridesChangeNothing(t *testing.T) {
+	for _, name := range []string{"GIT_AGE_ALLOW_EMPTY", "GIT_AGE_ALLOW_PRIVATE_KEYS", "GIT_AGE_ALLOW_STALE_RECIPIENTS", "GIT_AGE_ALLOW_REMOVE", "GIT_AGE_ALLOW_PLAINTEXT_PUSH"} {
+		t.Run(name, func(t *testing.T) {
+			isolateHookEnvironment(t)
+			directory, _, _ := cleanFixture(t, []byte("original\n"), false)
+			writeFile(t, directory, "secret.env", "changed\n")
+			t.Setenv(name, "maybe")
+			before := installSnapshot(t, directory)
+			var stdout, stderr bytes.Buffer
+			if code := Run([]string{"-C", directory, "lock"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 || !strings.Contains(stderr.String(), name) || !strings.Contains(stderr.String(), "maybe") {
+				t.Fatalf("invalid override: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
+			}
+			assertSnapshotUnchanged(t, directory, before)
+		})
+	}
+}
+
+func TestSafetyOverrideBooleans(t *testing.T) {
+	for _, value := range []string{"", " \t ", "0", "false", "no", "off", "1", "true", "yes", "on", " TRUE "} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("GIT_AGE_ALLOW_REMOVE", value)
+			allowed, err := allowCheck("GIT_AGE_ALLOW_REMOVE")
+			want := value == "1" || value == "true" || value == "yes" || value == "on" || value == " TRUE "
+			if err != nil || allowed != want {
+				t.Fatalf("boolean %q: %v, %v", value, allowed, err)
+			}
+		})
+	}
+}
+
 func TestCheckUnknown(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("requires Unix permission enforcement")

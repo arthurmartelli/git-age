@@ -118,7 +118,10 @@ func prePush(cmd *cobra.Command, options *globalOptions, remote string) error {
 		output.WriteByte('\n')
 	}
 	output.WriteString("Fix the affected commits before pushing, using `git commit --amend` or `git rebase -i`.\nTo push them explicitly: GIT_AGE_ALLOW_PLAINTEXT_PUSH=1 git push\n")
-	allowed := allowCheck("GIT_AGE_ALLOW_PLAINTEXT_PUSH")
+	allowed, err := allowCheck("GIT_AGE_ALLOW_PLAINTEXT_PUSH")
+	if err != nil {
+		return err
+	}
 	if allowed {
 		output.WriteString("git-age: pushing them by explicit choice (GIT_AGE_ALLOW_PLAINTEXT_PUSH).\n")
 	} else {
@@ -134,6 +137,10 @@ func prePush(cmd *cobra.Command, options *globalOptions, remote string) error {
 }
 
 func preCommit(cmd *cobra.Command, options *globalOptions) error {
+	allowEmpty, err := allowCheck("GIT_AGE_ALLOW_EMPTY")
+	if err != nil {
+		return err
+	}
 	check, err := repository.CheckCommit(options.directory)
 	if err := refuseRemovedRules(cmd, check.RemovedRules, "Use `git-age uninstall` to remove the integration, or set GIT_AGE_ALLOW_REMOVE=1 to allow this removal."); err != nil {
 		return err
@@ -211,7 +218,7 @@ func preCommit(cmd *cobra.Command, options *globalOptions) error {
 			return err
 		}
 	}
-	if result.MadeEmpty && !allowCheck("GIT_AGE_ALLOW_EMPTY") {
+	if result.MadeEmpty && !allowEmpty {
 		return reportCheckFailure(cmd, "nothing to commit; staged files encrypt to the ciphertext already in HEAD", plaintext, "Set GIT_AGE_ALLOW_EMPTY=1 to amend or commit anyway. Commit aborted.")
 	}
 	return nil

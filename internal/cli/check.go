@@ -93,7 +93,11 @@ func reportCheckFailure(cmd *cobra.Command, message string, paths []string, advi
 
 // refuseUnless reports paths as a failure unless the environment variable allows them.
 func refuseUnless(cmd *cobra.Command, environment string, paths []string, message, advice string) error {
-	if len(paths) == 0 || allowCheck(environment) {
+	allowed, err := allowCheck(environment)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 || allowed {
 		return nil
 	}
 	return reportCheckFailure(cmd, message, paths, advice)
@@ -104,9 +108,25 @@ func refuseRemovedRules(cmd *cobra.Command, paths []string, advice string) error
 		"Restore them with:\n\n  git restore --staged --worktree -- "+shellPaths(paths)+"\n\n"+advice)
 }
 
-func allowCheck(name string) bool {
-	allowed, err := repository.ParseBool(os.Getenv(name))
-	return err == nil && allowed
+func allowCheck(name string) (bool, error) {
+	value := os.Getenv(name)
+	if strings.TrimSpace(value) == "" {
+		return false, nil
+	}
+	allowed, err := repository.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", name, err)
+	}
+	return allowed, nil
+}
+
+func validateSafetyOverrides() error {
+	for _, name := range []string{"GIT_AGE_ALLOW_EMPTY", "GIT_AGE_ALLOW_PRIVATE_KEYS", "GIT_AGE_ALLOW_STALE_RECIPIENTS", "GIT_AGE_ALLOW_REMOVE", "GIT_AGE_ALLOW_PLAINTEXT_PUSH"} {
+		if _, err := allowCheck(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func shellPaths(paths []string) string {

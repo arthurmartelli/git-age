@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// configValues returns every value of key, where an empty value clears
+// configValues returns every value of key, where a blank value clears
 // those before it. Flags such as --path or --bool convert the values.
 func configValues(directory, key string, flags ...string) ([]string, error) {
 	args := append(append([]string{"config", "--null"}, flags...), "--get-all", key)
@@ -28,7 +28,7 @@ func configValues(directory, key string, flags ...string) ([]string, error) {
 	}
 	var values []string
 	for _, value := range strings.Split(strings.TrimSuffix(string(output), "\x00"), "\x00") {
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			values = nil
 		} else {
 			values = append(values, value)
@@ -74,7 +74,11 @@ func (s identitySet) canDecrypt(content []byte) (bool, error) {
 
 func loadIdentities(directory, root string, paths []string) (identitySet, error) {
 	if len(paths) == 0 {
-		paths = filepath.SplitList(os.Getenv("GIT_AGE_KEY_FILE"))
+		for _, path := range filepath.SplitList(os.Getenv("GIT_AGE_KEY_FILE")) {
+			if strings.TrimSpace(path) != "" {
+				paths = append(paths, path)
+			}
+		}
 	}
 	if len(paths) == 0 {
 		var err error
@@ -90,8 +94,16 @@ func loadIdentities(directory, root string, paths []string) (identitySet, error)
 		}
 	}
 	var set identitySet
+	seen := map[string]bool{}
 	for _, path := range paths {
-		path = absolutePath(directory, path)
+		path, err := identityPath(directory, path)
+		if err != nil {
+			return identitySet{}, err
+		}
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return identitySet{}, err
@@ -145,6 +157,21 @@ func loadIdentities(directory, root string, paths []string) (identitySet, error)
 		set.paths = append(set.paths, path)
 	}
 	return set, nil
+}
+
+func identityPath(directory, path string) (string, error) {
+	if path == "~" || strings.HasPrefix(path, "~/") || os.PathSeparator == '\\' && strings.HasPrefix(path, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("expand identity path: %w", err)
+		}
+		if path == "~" {
+			path = home
+		} else {
+			path = filepath.Join(home, path[2:])
+		}
+	}
+	return filepath.EvalSymlinks(absolutePath(directory, path))
 }
 
 func pluginUI() *plugin.ClientUI {

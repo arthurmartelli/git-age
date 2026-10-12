@@ -332,6 +332,10 @@ The first configured source wins:
 
 `GIT_AGE_KEY_FILE` accepts multiple paths separated by `:`.
 
+Empty entries in the environment list are ignored. Duplicate paths,
+including symbolic-link aliases, load an identity file only once.
+`~` and `~/...` expand to your home directory in all identity sources.
+
 
 Recipients
 ~~~~~~~~~~
@@ -362,6 +366,10 @@ CONFIGURATION
 -------------
 
 git-age uses normal Git configuration.
+
+For every age setting, an empty or whitespace-only value clears earlier
+values. Later nonempty values still apply. Boolean settings use explicit
+values such as `true` or `false`; a valueless setting clears earlier ones.
 
 It can therefore be configured per repository, globally, or through
 Git's `includeIf` support.
@@ -413,6 +421,9 @@ Boolean values accept:
     true / false
     yes / no
     on / off
+
+Unset or blank GIT_AGE_ALLOW_* variables mean false. Invalid values are
+reported before a command changes files or the index.
 
 
 GIT HOOKS

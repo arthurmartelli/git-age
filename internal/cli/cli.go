@@ -90,6 +90,9 @@ func newRootCommand() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			return validateSafetyOverrides()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
