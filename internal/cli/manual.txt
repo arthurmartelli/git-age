@@ -278,6 +278,11 @@ Each line contains one age recipient or SSH public key:
     age1...
     ssh-ed25519 AAAA...
 
+Native X25519, hybrid post-quantum, tagged and plugin recipients are
+supported. Plugin recipients require the matching `age-plugin-NAME`
+executable on PATH. Age enforces compatible recipient types, including
+its restriction on mixing post-quantum and classical recipients.
+
 If recipients are not configured, git-age encrypts to your identities.
 
 
@@ -303,6 +308,12 @@ Identities
 ~~~~~~~~~~
 
 Identities are private keys used to decrypt files.
+
+Identity files may contain native X25519, hybrid post-quantum or
+`AGE-PLUGIN-...` identities. Unencrypted SSH private keys are also
+supported. Plugins can request PINs or hardware confirmation through the
+terminal. With no recipients configured, plugin identities are passed
+to their plugin for encryption, without exposing their private encoding.
 
 The first configured source wins:
 

@@ -1,15 +1,18 @@
 package repository
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
-	"filippo.io/age"
-	"filippo.io/age/agessh"
 	"fmt"
-	"golang.org/x/crypto/ssh"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"filippo.io/age"
+	"filippo.io/age/agessh"
+	"filippo.io/age/plugin"
+	"golang.org/x/crypto/ssh"
 )
 
 // configValues returns every value of key, where an empty value clears
@@ -39,8 +42,10 @@ var errNoIdentity = errors.New("no identity configured; use -i or generate a key
 // identitySet holds the user's identities and the recipients they decrypt for.
 type identitySet struct {
 	identities []age.Identity
+	recipients []age.Recipient
 	own        []string
 	paths      []string
+	plugins    bool
 }
 
 // describe names the identity files, for messages.
@@ -52,6 +57,15 @@ func (s identitySet) describe() string {
 		return "identity " + s.paths[0]
 	}
 	return "identities " + strings.Join(s.paths, ", ")
+}
+
+func (s identitySet) canDecrypt(content []byte) (bool, error) {
+	_, err := decryptContent(content, s.identities)
+	var noMatch *age.NoIdentityMatchError
+	if errors.As(err, &noMatch) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func loadIdentities(directory, root string, paths []string) (identitySet, error) {
@@ -101,7 +115,7 @@ func loadIdentities(directory, root string, paths []string) (identitySet, error)
 			}
 			set.own = append(set.own, strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))))
 		} else {
-			parsed, err = age.ParseIdentities(bytes.NewReader(content))
+			parsed, err = parseIdentityFile(content)
 			if err != nil {
 				return identitySet{}, fmt.Errorf("%s: %w", path, err)
 			}
@@ -110,10 +124,64 @@ func loadIdentities(directory, root string, paths []string) (identitySet, error)
 			switch identity := identity.(type) {
 			case *age.X25519Identity:
 				set.own = append(set.own, identity.Recipient().String())
+				set.recipients = append(set.recipients, identity.Recipient())
+			case *age.HybridIdentity:
+				set.own = append(set.own, identity.Recipient().String())
+				set.recipients = append(set.recipients, identity.Recipient())
+			case *plugin.Identity:
+				set.recipients = append(set.recipients, identity.Recipient())
+				set.plugins = true
+			case *agessh.RSAIdentity:
+				set.recipients = append(set.recipients, identity.Recipient())
+			case *agessh.Ed25519Identity:
+				set.recipients = append(set.recipients, identity.Recipient())
 			}
 		}
 		set.identities = append(set.identities, parsed...)
 		set.paths = append(set.paths, path)
 	}
 	return set, nil
+}
+
+func pluginUI() *plugin.ClientUI {
+	message := func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "git-age: "+format+"\n", args...)
+	}
+	return plugin.NewTerminalUI(message, message)
+}
+
+// parseIdentityFile keeps native age parsing and adds plugin identity lines.
+// Never include a failed line in an error: it may contain a private key.
+func parseIdentityFile(content []byte) ([]age.Identity, error) {
+	if len(content) > 1<<24 {
+		return nil, errors.New("identities file is too long")
+	}
+	var identities []age.Identity
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	for line := 1; scanner.Scan(); line++ {
+		value := scanner.Text()
+		if value == "" || strings.HasPrefix(value, "#") {
+			continue
+		}
+		var parsed []age.Identity
+		var err error
+		if strings.HasPrefix(value, "AGE-PLUGIN-") {
+			var identity *plugin.Identity
+			identity, err = plugin.NewIdentity(value, pluginUI())
+			parsed = []age.Identity{identity}
+		} else {
+			parsed, err = age.ParseIdentities(strings.NewReader(value))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("identity at line %d: %w", line, err)
+		}
+		identities = append(identities, parsed...)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read identities: %w", err)
+	}
+	if len(identities) == 0 {
+		return nil, errors.New("no identities found")
+	}
+	return identities, nil
 }

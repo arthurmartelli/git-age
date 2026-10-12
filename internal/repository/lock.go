@@ -11,6 +11,8 @@ import (
 
 	"filippo.io/age"
 	"filippo.io/age/agessh"
+	"filippo.io/age/plugin"
+	"filippo.io/age/tag"
 )
 
 type encryptionOptions struct {
@@ -101,8 +103,17 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 			return nil, nil, err
 		}
 		replacements = append(replacements, replacement{path, original, encrypted})
-		if len(keys.own) != 0 && !containsRecipient(target.values, keys.own) {
-			noAccess = append(noAccess, file)
+		if !keys.toIdentities && (len(keys.own) != 0 || keys.plugins) {
+			mine := containsRecipient(target.values, keys.own)
+			if !mine && keys.plugins {
+				mine, err = keys.canDecrypt(encrypted)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			if !mine {
+				noAccess = append(noAccess, file)
+			}
 		}
 	}
 	if len(replacements) == 0 && len(skipped) != 0 {
@@ -138,7 +149,7 @@ func loadKeys(directory, root string, explicitRecipients, identityPaths []string
 		return keys{}, err
 	}
 	k, err := resolveKeys(directory, root, explicitRecipients, identities, rules)
-	if err == nil && len(k.base) == 0 {
+	if err == nil && len(k.base) == 0 && (!k.toIdentities || len(k.identitySet.recipients) == 0) {
 		err = errNoKey
 	}
 	return k, err
@@ -205,7 +216,13 @@ func (k keys) target(root, path string, ruleContents map[string][]byte) (fileTar
 	if err != nil {
 		return target, err
 	}
-	target.recipients, err = parseRecipients(target.values)
+	values := target.values
+	if k.toIdentities {
+		values = target.listed
+		target.recipients = append(target.recipients, k.identitySet.recipients...)
+	}
+	parsed, err := parseRecipients(values)
+	target.recipients = append(target.recipients, parsed...)
 	return target, err
 }
 
@@ -243,14 +260,42 @@ func (k keys) describeTarget(root, path string, ruleContents map[string][]byte) 
 // file is also encrypted to whoever locked it, which counts as the user
 // unless the user is listed elsewhere and so has partial access.
 func (k keys) encryptedToUser(target fileTarget) (bool, error) {
-	if len(k.own) == 0 || containsRecipient(target.listed, k.own) {
+	if len(k.own) == 0 && !k.plugins {
 		return true, nil
+	}
+	mine, err := k.containsIdentity(target.listed)
+	if err != nil || mine {
+		return mine, err
 	}
 	if len(target.listed) != 0 && !k.toIdentities {
 		return false, nil
 	}
 	listed, err := k.listedRecipients()
-	return !containsRecipient(listed, k.own), err
+	if err != nil {
+		return false, err
+	}
+	mine, err = k.containsIdentity(listed)
+	return !mine, err
+}
+
+func (k keys) containsIdentity(values []string) (bool, error) {
+	if containsRecipient(values, k.own) {
+		return true, nil
+	}
+	if !k.plugins || len(values) == 0 {
+		return false, nil
+	}
+	// Plugin identities don't expose a public key encoding. Confirm access to
+	// the listed recipients with an empty in-memory message instead.
+	recipients, err := parseRecipients(values)
+	if err != nil {
+		return false, err
+	}
+	probe, err := encryptContent(nil, recipients)
+	if err != nil {
+		return false, err
+	}
+	return k.canDecrypt(probe)
 }
 
 // listedRecipients reads every [recipients] list in the repository once.
@@ -324,7 +369,9 @@ func containsRecipient(values, own []string) bool {
 	for _, value := range values {
 		if strings.HasPrefix(value, "ssh-") {
 			// SSH key comments do not affect recipient identity.
-			value = strings.Join(strings.Fields(value)[:2], " ")
+			if fields := strings.Fields(value); len(fields) >= 2 {
+				value = strings.Join(fields[:2], " ")
+			}
 		}
 		for _, recipient := range own {
 			if value == recipient {
@@ -345,10 +392,22 @@ func parseRecipients(values []string) ([]age.Recipient, error) {
 		seen[value] = true
 		var recipient age.Recipient
 		var err error
-		if strings.HasPrefix(value, "ssh-") {
+		switch {
+		case strings.HasPrefix(value, "ssh-"):
 			recipient, err = agessh.ParseRecipient(value)
-		} else {
-			recipient, err = age.ParseX25519Recipient(value)
+		case strings.HasPrefix(value, "age1tag1"), strings.HasPrefix(value, "age1tagpq1"):
+			recipient, err = tag.ParseRecipient(value)
+		case strings.HasPrefix(value, "age1") && !strings.HasPrefix(value, "age1pq1") && strings.Count(value, "1") > 1:
+			recipient, err = plugin.NewRecipient(value, pluginUI())
+		default:
+			var parsed []age.Recipient
+			parsed, err = age.ParseRecipients(strings.NewReader(value))
+			if err == nil && len(parsed) != 1 {
+				err = errors.New("expected one recipient per value")
+			}
+			if err == nil {
+				recipient = parsed[0]
+			}
 		}
 		if err != nil {
 			return nil, fmt.Errorf("invalid recipient %q: %w", value, err)
