@@ -488,6 +488,9 @@ func TestInstallDryRunAndPreflight(t *testing.T) {
 			} else if err == nil {
 				t.Fatal("expected preflight failure")
 			}
+			if scenario == "broken attributes" && (!strings.Contains(err.Error(), attributes) || !strings.Contains(err.Error(), "# END git-age") || !strings.Contains(err.Error(), "before any user attributes")) {
+				t.Fatalf("missing attributes repair advice: %v", err)
+			}
 			if !reflect.DeepEqual(before, installSnapshot(t, directory)) {
 				t.Fatal("dry run or failed preflight changed repository files")
 			}

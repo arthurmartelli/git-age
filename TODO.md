@@ -10,7 +10,7 @@ Pending work on the Go port before merging `go-port` into `main`.
   so files left stale by earlier commits aren't flagged. Add rekey/`git add`
   advice to the warning.
 - [x] `lock` doesn't warn about stale recipients afterwards (`cli/lock.go:89-108`).
-- [ ] `unlock`, `rekey` and `edit` don't refresh the `.git/info/attributes` block;
+- [x] `unlock`, `rekey` and `edit` don't refresh the `.git/info/attributes` block;
   only `lock` and the hooks do.
 - [x] Reject invalid `GIT_AGE_ALLOW_*` values (e.g. `maybe`) instead of silently
   treating them as false (`cli/check.go:107-110`).
@@ -21,7 +21,7 @@ Pending work on the Go port before merging `go-port` into `main`.
 - [x] Decide whether an empty value should clear earlier values for every config
   key or only `age.keyFile` (`identities.go:17-35`); treat whitespace-only as
   empty.
-- [ ] Handle lone `\r` line endings in `.gitage` (`files.go:224`); they currently
+- [x] Handle lone `\r` line endings in `.gitage` (`files.go:224`); they currently
   error.
 - [ ] The ciphertext fingerprint cache in `.git/git-age/recipients`
   (`repository/recipients_cache.go`) gains one file per encryption and is never
@@ -31,7 +31,7 @@ Pending work on the Go port before merging `go-port` into `main`.
   Also keep entries newer than a grace period (e.g. 30 days), so ciphertext on
   other branches or in the stash survives a branch switch. Remove the directory
   on uninstall.
-- [ ] Tolerate a BEGIN marker without END in `.git/info/attributes`
+- [x] Tolerate a BEGIN marker without END in `.git/info/attributes`
   (`attributes.go:324`), or give a clear repair message.
 
 ## UX

@@ -79,6 +79,9 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "would edit: %s\n", file.Path)
 				return err
 			}
+			if err := refreshGitAttributes(cmd, options.directory); err != nil {
+				return err
+			}
 			if options.verbose {
 				_, err = fmt.Fprintf(cmd.OutOrStdout(), "edited: %s\n", file.Path)
 			}

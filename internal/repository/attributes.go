@@ -36,7 +36,7 @@ func RefreshAttributes(directory string) error {
 	}
 	updated, err := updateAttributes(existing, block)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s: %w", path, err)
 	}
 	if string(existing) == string(updated) {
 		return nil
@@ -215,6 +215,9 @@ func updateAttributes(existing, block []byte) ([]byte, error) {
 			prefix += "\n"
 		}
 		return []byte(prefix + string(block)), nil
+	}
+	if begin != -1 && end == -1 {
+		return nil, fmt.Errorf("incomplete git-age attributes block: missing %q; insert this marker after the generated patterns and before any user attributes, then retry", attributesEnd)
 	}
 	if begin == -1 || end <= begin {
 		return nil, fmt.Errorf("incomplete git-age attributes block")

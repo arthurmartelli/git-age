@@ -237,6 +237,8 @@ Example:
 [files]
 ~~~~~~~
 
+`.gitage` accepts LF, CRLF and CR line endings, including mixed endings.
+
 `[files]` uses gitignore-style patterns.
 
 Supported syntax includes:
@@ -568,6 +570,12 @@ GIT INTEGRATION
 
 Nothing is committed to the repository. The settings live in repository
 configuration and `.git/info/attributes`.
+
+Successful `lock`, `unlock`, `rekey` and `edit` commands refresh the
+generated attributes to match the current rules and enabled drivers.
+Dry runs leave attributes unchanged. If a generated block is missing its
+`# END git-age` marker, insert that marker after the generated patterns
+and before any user attributes, then retry the command.
 
 Disabling one integration while keeping others enabled also disables
 its Git attributes. Globally configured age drivers stay inactive for

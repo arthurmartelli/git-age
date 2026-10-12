@@ -22,6 +22,11 @@ func newRekeyCommand(options *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !options.dryRun {
+				if err := refreshGitAttributes(cmd, options.directory); err != nil {
+					return err
+				}
+			}
 			skipped := map[string]string{}
 			for _, file := range inaccessible {
 				skipped[file.Path] = "not encrypted to you"

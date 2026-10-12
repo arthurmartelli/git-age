@@ -221,7 +221,8 @@ func parseRules(path string, content []byte) ([]byte, []string, error) {
 	if !utf8.Valid(content) {
 		return nil, nil, fmt.Errorf("%s: .gitage must be UTF-8 text", path)
 	}
-	lines := strings.Split(string(content), "\n")
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	lines := strings.Split(strings.ReplaceAll(text, "\r", "\n"), "\n")
 	section := ""
 	seen := map[string]bool{}
 	var recipients []string
