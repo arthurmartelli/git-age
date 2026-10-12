@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -92,6 +93,71 @@ func TestEditTerminalInterrupt(t *testing.T) {
 		t.Fatalf("terminal editor: %v, timeout %v, output %q, stderr %q", err, ctx.Err(), remaining, &stderr)
 	}
 	assertDecrypts(t, readFile(t, directory, "secret.env"), identity, []byte("saved\n"))
+	assertNoEditCopies(t, directory)
+}
+
+func TestEditTerminationRestoresTerminal(t *testing.T) {
+	script, err := exec.LookPath("script")
+	if err != nil {
+		t.Fatal("terminal editor tests require script")
+	}
+	binary := buildGitAge(t)
+	isolateHookEnvironment(t)
+	directory, _, ciphertext := cleanFixture(t, []byte("original\n"), false)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'" }
+	t.Setenv("GIT_EDITOR", "exec "+quote(executable)+" -test.run=^TestInterruptEditor$ --")
+	t.Setenv("GIT_AGE_TEST_INTERRUPT_EDITOR", "save")
+	t.Setenv("GIT_AGE_TEST_RAW_EDITOR", "1")
+	program := quote(binary) + " -C " + quote(directory) + ` edit secret.env; editor_status=$?; stty -a; exit "$editor_status"`
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	args := []string{"-q", "-e", "-c", program, "/dev/null"}
+	if runtime.GOOS == "darwin" {
+		args = []string{"-q", "/dev/null", "/bin/sh", "-c", program}
+	}
+	command := exec.CommandContext(ctx, script, args...)
+	command.Env = append(os.Environ(), "SHELL=/bin/sh")
+	command.WaitDelay = time.Second
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	command.Stdin = input
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(output)
+	ready, err := reader.ReadString('\n')
+	if err != nil || !strings.HasPrefix(ready, "editor ready ") {
+		t.Fatalf("raw editor did not start: %q, %v", ready, err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(ready, "editor ready ")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err == nil || ctx.Err() != nil || !bytes.Contains(remaining, []byte("git-age: terminated")) || bytes.Contains(remaining, []byte("-icanon")) || bytes.Contains(remaining, []byte("-echo ")) {
+		t.Fatalf("terminal was not restored: %v, timeout %v, output %q", err, ctx.Err(), remaining)
+	}
+	if !bytes.Equal(ciphertext, readFile(t, directory, "secret.env")) {
+		t.Fatal("termination changed ciphertext")
+	}
 	assertNoEditCopies(t, directory)
 }
 

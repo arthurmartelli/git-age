@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/term"
 )
 
 func TestInterrupt(t *testing.T) {
@@ -137,7 +139,14 @@ func TestInterruptEditor(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
-	fmt.Fprintln(os.Stdout, "editor ready")
+	if os.Getenv("GIT_AGE_TEST_RAW_EDITOR") != "" {
+		if _, err := term.MakeRaw(int(os.Stdin.Fd())); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(os.Stdout, "editor ready %d\n", os.Getppid())
+	} else {
+		fmt.Fprintln(os.Stdout, "editor ready")
+	}
 	input := make(chan string, 1)
 	go func() {
 		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')

@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 func commandSignals() []os.Signal {
@@ -27,6 +28,7 @@ func runEditor(ctx context.Context, command *exec.Cmd, state *editorSignals) (er
 		defer tty.Close()
 		fd := int(tty.Fd())
 		if group, getErr := unix.IoctlGetInt(fd, unix.TIOCGPGRP); getErr == nil && group == syscall.Getpgrp() {
+			terminalState, _ := term.GetState(fd)
 			command.SysProcAttr.Foreground = true
 			command.SysProcAttr.Ctty = fd
 			defer func() {
@@ -34,7 +36,11 @@ func runEditor(ctx context.Context, command *exec.Cmd, state *editorSignals) (er
 				// SIGTTOU to be ignored, not merely caught by a Go handler.
 				signal.Ignore(syscall.SIGTTOU)
 				defer signal.Reset(syscall.SIGTTOU)
-				if restoreErr := unix.IoctlSetPointerInt(fd, unix.TIOCSPGRP, group); restoreErr != nil && ctx.Err() == nil {
+				restoreErr := unix.IoctlSetPointerInt(fd, unix.TIOCSPGRP, group)
+				if terminalState != nil {
+					restoreErr = errors.Join(restoreErr, term.Restore(fd, terminalState))
+				}
+				if restoreErr != nil && ctx.Err() == nil {
 					err = errors.Join(err, fmt.Errorf("restore editor terminal: %w", restoreErr))
 				}
 			}()
