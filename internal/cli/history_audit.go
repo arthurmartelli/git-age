@@ -124,5 +124,5 @@ was encrypted to them, in any copy of the history. Treat them as compromised:
   4. change the secrets those files hold anyway
 
 ` + "`history rekey`" + ` does not remove the key files from history; purge them with
-a history rewriting tool such as git filter-repo.
+git-age history purge PATH ... or a tool such as git filter-repo.
 `

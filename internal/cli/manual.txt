@@ -133,7 +133,7 @@ COMMANDS
 	Search Git history for protected files committed as plaintext
 	or for committed private keys.
 
-	With no revisions, search all refs except history-rekey backups.
+	With no revisions, search all refs except history-rewrite backups.
 	`--reflog` also searches commits kept only by reflogs.
 
     history rekey
@@ -142,6 +142,12 @@ COMMANDS
 
 	`--plaintext-only` keeps existing ciphertext.
 	`--keep-undecryptable` keeps versions you cannot decrypt.
+	`--yes` skips confirmation. Use `--dry-run` to preview changes.
+
+    history purge PATH ...
+    history purge --all
+	Remove selected paths from local branches, tags and the stash.
+	`--all` removes every version of all protected files.
 	`--yes` skips confirmation. Use `--dry-run` to preview changes.
 
     completion SHELL
@@ -869,6 +875,55 @@ Rewriting history cannot remove copies that already exist in clones,
 forks, backups or server caches. Always rotate exposed secrets.
 
 
+HISTORY PURGE
+-------------
+
+Remove selected files or directories throughout local history:
+
+    $ git-age history purge --dry-run secret.env old-secrets/
+    $ git-age history purge secret.env old-secrets/
+
+Paths are literal, relative to the current directory or `-C` directory.
+Deleted paths can be selected. Directories include all their historical
+contents. Paths need not be protected by `.gitage`. Use `--` before a
+path whose name starts with a dash. Renames are not followed; select
+every historical name you want removed.
+
+To remove every version of all protected files:
+
+    $ git-age history purge --all --dry-run
+    $ git-age history purge --all
+
+A path is selected if the current `.gitage` protects it, or if it was
+protected in any historical commit. Once selected, all versions of
+that path are removed, including plaintext and ciphertext versions.
+`.gitage` and `.gitage.key` are excluded from `--all`. Other private key
+files are selected only if protected by rules; pass their paths explicitly
+if you want to remove them.
+
+Purge requires no recipients or decryption identities. It also removes
+selected files from the index and working tree when updating HEAD.
+Commits and merge structure are kept, even if their trees become empty.
+Changed commit and tag signatures are removed.
+
+The command previews the selected paths and asks for confirmation.
+Use `--yes` in scripts. `--dry-run` writes no objects and moves no refs.
+The same repository checks and ref scope as history rekey apply,
+including detached HEAD. Remote-tracking refs and notes are kept.
+
+Original refs remain under `refs/git-age/original`. Check the result
+before deleting the backups. To remove the old history locally:
+
+    $ git for-each-ref --format='delete %(refname)' refs/git-age/original | git update-ref --stdin
+    $ git reflog expire --expire=now --all
+    $ git gc --prune=now
+
+Other refs, including remote-tracking refs, can still retain old history.
+Force-push the rewritten branches and tags if you want to replace remote
+history, and have other users re-clone. Rotate exposed secrets; existing
+clones, forks and server caches may still hold them.
+
+
 COMMITTED PRIVATE KEYS
 ----------------------
 
@@ -882,7 +937,8 @@ Generate a replacement, update its recipient in `.gitage`, and run:
 History rekey warns about committed private keys but does not remove
 their files from history.
 
-Use a history-rewriting tool such as `git filter-repo` to purge them.
+Remove each key file with `git-age history purge PATH ...`.
+`--all` selects protected files and excludes `.gitage.key`.
 
 
 PORCELAIN STATUS

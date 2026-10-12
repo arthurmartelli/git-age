@@ -77,6 +77,7 @@ func TestHelpHistorySubcommands(t *testing.T) {
 	}{
 		{"audit", "--reflog"},
 		{"rekey", "--keep-undecryptable"},
+		{"purge", "--all"},
 	} {
 		t.Run(test.command, func(t *testing.T) {
 			var help, direct, stderr bytes.Buffer

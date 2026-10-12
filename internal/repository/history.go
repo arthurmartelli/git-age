@@ -14,10 +14,10 @@ import (
 	"strings"
 )
 
-// originalRefs backs up the refs `history rekey` rewrote, so that it can be undone.
+// originalRefs backs up rewritten refs so that a history rewrite can be undone.
 const originalRefs = "refs/git-age/original"
 
-// DeleteOriginalRefs is the command that drops the backup of a history rekey.
+// DeleteOriginalRefs is the command that drops the backup of a history rewrite.
 const DeleteOriginalRefs = "git for-each-ref --format='delete %(refname)' " + originalRefs + " | git update-ref --stdin"
 
 // objectReader reads Git objects through one long-running git cat-file --batch.
@@ -361,7 +361,7 @@ func Audit(directory string, revisions []string, reflog bool) (Leaks, error) {
 		return Leaks{}, err
 	}
 	if len(revisions) == 0 {
-		// What a rekey backed up is the old history it replaced.
+		// The backup holds the old history a rewrite replaced.
 		revisions = []string{"--exclude=" + originalRefs + "/*", "--all"}
 	}
 	if reflog {

@@ -11,6 +11,6 @@ func newHistoryCommand(options *globalOptions) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	history.AddCommand(newHistoryAuditCommand(options), newHistoryRekeyCommand(options))
+	history.AddCommand(newHistoryAuditCommand(options), newHistoryRekeyCommand(options), newHistoryPurgeCommand(options))
 	return history
 }

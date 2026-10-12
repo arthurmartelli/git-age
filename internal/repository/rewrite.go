@@ -22,7 +22,7 @@ var tagSignature = regexp.MustCompile(`(?m)^-----BEGIN (?:PGP SIGNATURE|PGP MESS
 
 // CheckRewritable refuses to rewrite history where that could lose work or miss commits.
 func CheckRewritable(directory string) error {
-	root, err := Root(directory, "history rekey")
+	root, err := Root(directory, "history rewrite")
 	if err != nil {
 		return err
 	}
@@ -77,7 +77,7 @@ func CheckRewritable(directory string) error {
 	return nil
 }
 
-// RefMove is a ref a history rekey moves.
+// RefMove is a ref a history rewrite moves.
 type RefMove struct{ Ref, Old, New string }
 
 // HistoryRekeyOptions configures a history rekey.
@@ -91,16 +91,22 @@ type HistoryRekeyOptions struct {
 // branches, tags and stash to the current recipients. Preparing it only writes
 // objects; Apply then moves the refs.
 type HistoryRekey struct {
-	Commits, Changed       int
-	Moves                  []RefMove
+	*HistoryRewrite
 	Encrypted, Reencrypted int
-	Signatures             int      // Commit and tag signatures dropped.
 	Undecryptable          []string // Versions that stay as they are, as "path in commit".
 	PrivateKeys            int      // Private key files in history, which stay there.
-	Warnings               []string
+}
+
+// HistoryRewrite holds the ref changes shared by history rekey and purge.
+type HistoryRewrite struct {
+	Commits, Changed int
+	Moves            []RefMove
+	Signatures       int // Commit and tag signatures dropped.
+	Warnings         []string
 
 	root, directory string
 	identities      []string
+	operation       string
 }
 
 type rewriteRef struct{ name, oid, kind string }
@@ -127,7 +133,7 @@ func PrepareHistoryRekey(directory string, options HistoryRekeyOptions) (*Histor
 	if err != nil {
 		return nil, err
 	}
-	result := &HistoryRekey{root: root, directory: directory, identities: options.Identities}
+	result := &HistoryRekey{HistoryRewrite: &HistoryRewrite{root: root, directory: directory, identities: options.Identities, operation: "rekey"}}
 	if len(refs) == 0 {
 		return result, nil
 	}
@@ -156,32 +162,13 @@ func PrepareHistoryRekey(directory string, options HistoryRekeyOptions) (*Histor
 	result.PrivateKeys, result.Warnings = len(keyFiles), leaks.Warnings
 
 	r := &rewriter{
-		HistoryRekey: result, history: h, keys: keys, options: options,
+		HistoryRewrite: result.HistoryRewrite, rekey: result, history: h, keys: keys, options: options,
 		oidLength: len(h.commits[0]) / 2, targets: map[string]fileTarget{},
 		blobs: map[string]string{}, trees: map[string]string{}, commits: map[string]string{}, tags: map[string]string{},
 		undecryptable: map[version]string{},
 	}
-	for _, commit := range h.commits {
-		if err := r.rewriteCommit(commit); err != nil {
-			return nil, err
-		}
-	}
-	for _, ref := range refs {
-		updated := r.commits[ref.oid]
-		if ref.kind == "tag" {
-			if updated, err = r.rewriteTag(ref.oid); err != nil {
-				return nil, err
-			}
-		}
-		if updated != "" && updated != ref.oid {
-			result.Moves = append(result.Moves, RefMove{ref.name, ref.oid, updated})
-		}
-	}
-	result.Commits = len(h.commits)
-	for old, updated := range r.commits {
-		if old != updated {
-			result.Changed++
-		}
+	if err := r.rewriteRefs(refs); err != nil {
+		return nil, err
 	}
 	for v, commit := range r.undecryptable {
 		result.Undecryptable = append(result.Undecryptable, v.path+" in "+commit[:12])
@@ -190,8 +177,36 @@ func PrepareHistoryRekey(directory string, options HistoryRekeyOptions) (*Histor
 	return result, nil
 }
 
+func (r *rewriter) rewriteRefs(refs []rewriteRef) error {
+	for _, commit := range r.history.commits {
+		if err := r.rewriteCommit(commit); err != nil {
+			return err
+		}
+	}
+	for _, ref := range refs {
+		updated := r.commits[ref.oid]
+		if ref.kind == "tag" {
+			var err error
+			if updated, err = r.rewriteTag(ref.oid); err != nil {
+				return err
+			}
+		}
+		if updated != "" && updated != ref.oid {
+			r.Moves = append(r.Moves, RefMove{ref.name, ref.oid, updated})
+		}
+	}
+	r.Commits = len(r.history.commits)
+	for old, updated := range r.commits {
+		if old != updated {
+			r.Changed++
+		}
+	}
+	return nil
+}
+
 type rewriter struct {
-	*HistoryRekey
+	*HistoryRewrite
+	rekey     *HistoryRekey
 	history   *history
 	keys      keys
 	options   HistoryRekeyOptions
@@ -201,6 +216,7 @@ type rewriter struct {
 	// ID and rule state, commits and tags by old ID.
 	blobs, trees, commits, tags map[string]string
 	undecryptable               map[version]string // The first commit of each.
+	purge                       map[string]bool    // Non-nil for purge, by repository-relative path.
 }
 
 func (r *rewriter) write(kind string, content []byte) (string, error) {
@@ -262,7 +278,7 @@ func (r *rewriter) rewriteBlob(commit, name, oid string) (string, error) {
 		if updated, err = r.encrypt(target, content); err != nil {
 			return "", err
 		}
-		r.Encrypted++
+		r.rekey.Encrypted++
 	} else if !r.options.PlaintextOnly {
 		plaintext, err := decryptContent(content, r.keys.identities)
 		if errors.Is(err, errNoIdentity) {
@@ -276,7 +292,7 @@ func (r *rewriter) rewriteBlob(commit, name, oid string) (string, error) {
 			if updated, err = r.encrypt(target, plaintext); err != nil {
 				return "", err
 			}
-			r.Reencrypted++
+			r.rekey.Reencrypted++
 		}
 	}
 	r.blobs[key] = updated
@@ -305,15 +321,21 @@ func (r *rewriter) rewriteTree(commit, prefix, oid string) (string, error) {
 		content = content[nul+1+r.oidLength:]
 		name := path.Join(prefix, entryName)
 		updated := entry
-		if mode == "40000" {
+		if mode != "40000" && r.purge[name] {
+			changed = true
+			continue
+		} else if mode == "40000" {
 			updated, err = r.rewriteTree(commit, name, entry)
-		} else if regularMode(mode) && r.history.protects(commit, name) {
+		} else if r.purge == nil && regularMode(mode) && r.history.protects(commit, name) {
 			updated, err = r.rewriteBlob(commit, name, entry)
 		}
 		if err != nil {
 			return "", err
 		}
 		changed = changed || updated != entry
+		if updated == "" { // The rewritten subtree is empty.
+			continue
+		}
 		raw, err := hex.DecodeString(updated)
 		if err != nil {
 			return "", err
@@ -323,7 +345,9 @@ func (r *rewriter) rewriteTree(commit, prefix, oid string) (string, error) {
 	}
 	updated := oid
 	if changed {
-		if updated, err = r.write("tree", rewritten.Bytes()); err != nil {
+		if r.purge != nil && prefix != "" && rewritten.Len() == 0 {
+			updated = ""
+		} else if updated, err = r.write("tree", rewritten.Bytes()); err != nil {
 			return "", err
 		}
 	}
@@ -498,16 +522,18 @@ func rewritableRefs(root string) ([]rewriteRef, error) {
 // Apply moves every ref, backing up its old value under refs/git-age/original,
 // all or none; then it checks out the new HEAD and unlocks again the files
 // that were unlocked.
-func (r *HistoryRekey) Apply() error {
+func (r *HistoryRewrite) Apply() error {
 	head, _ := git(r.root, "rev-parse", "--verify", "-q", "HEAD")
 	unlocked := map[string]bool{}
-	files, err := ProtectedFiles(r.root, nil)
-	if err != nil && !errors.Is(err, ErrNoRules) {
-		return err
-	}
-	for _, file := range files {
-		if file.State == Unlocked {
-			unlocked[file.Path] = true
+	if r.operation == "rekey" {
+		files, err := ProtectedFiles(r.root, nil)
+		if err != nil && !errors.Is(err, ErrNoRules) {
+			return err
+		}
+		for _, file := range files {
+			if file.State == Unlocked {
+				unlocked[file.Path] = true
+			}
 		}
 	}
 
@@ -520,7 +546,7 @@ func (r *HistoryRekey) Apply() error {
 		commands = append(commands, fmt.Sprintf("update %s %s %s", move.Ref, move.New, move.Old))
 	}
 	commands = append(commands, "prepare", "commit", "")
-	if _, err := gitWithInput(r.root, []byte(strings.Join(commands, "\n")), "update-ref", "-m", "git-age history rekey", "--stdin"); err != nil {
+	if _, err := gitWithInput(r.root, []byte(strings.Join(commands, "\n")), "update-ref", "-m", "git-age history "+r.operation, "--stdin"); err != nil {
 		return fmt.Errorf("cannot update the refs; none was changed: %w", err)
 	}
 
@@ -535,7 +561,7 @@ func (r *HistoryRekey) Apply() error {
 	if len(unlocked) == 0 {
 		return nil
 	}
-	files, err = ProtectedFiles(r.root, nil)
+	files, err := ProtectedFiles(r.root, nil)
 	if err != nil {
 		return err
 	}

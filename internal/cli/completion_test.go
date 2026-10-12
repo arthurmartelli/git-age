@@ -55,6 +55,8 @@ printf '%s\n' "${COMPREPLY[@]}"`
 					{[]string{"git-age", "lo"}, "lock"},
 					{[]string{"git", "age", "rek"}, "rekey"},
 					{[]string{"git-age", "history", "au"}, "audit"},
+					{[]string{"git-age", "history", "pu"}, "purge"},
+					{[]string{"git-age", "history", "purge", "--a"}, "--all"},
 					{[]string{"git", "age", "history", "rek"}, "rekey"},
 					{[]string{"git-age", "history", "audit", "--ref"}, "--reflog"},
 					{[]string{"git-age", "history", "rekey", "--keep"}, "--keep-undecryptable"},

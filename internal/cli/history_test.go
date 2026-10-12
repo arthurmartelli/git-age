@@ -22,6 +22,10 @@ func TestHistoryInvalidArguments(t *testing.T) {
 		{[]string{"history", "audit", "--identity", "unused"}, "unknown flag: --identity"},
 		{[]string{"history", "rekey", "--reflog"}, "unknown flag: --reflog"},
 		{[]string{"history", "rekey", "HEAD"}, "takes no revisions"},
+		{[]string{"history", "purge"}, "requires PATH ... or --all"},
+		{[]string{"history", "purge", "--all", "secret.env"}, "requires PATH ... or --all"},
+		{[]string{"history", "purge", "--identity", "unused"}, "unknown flag: --identity"},
+		{[]string{"history", "purge", "--reflog"}, "unknown flag: --reflog"},
 	} {
 		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
@@ -35,7 +39,7 @@ func TestHistoryInvalidArguments(t *testing.T) {
 func TestHistoryHelp(t *testing.T) {
 	for _, args := range [][]string{{"history"}, {"history", "--help"}, {"help", "history"}} {
 		var stdout, stderr bytes.Buffer
-		if code := Run(args, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "audit") || !strings.Contains(stdout.String(), "rekey") {
+		if code := Run(args, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "audit") || !strings.Contains(stdout.String(), "rekey") || !strings.Contains(stdout.String(), "purge") {
 			t.Fatalf("%v: exit %d, stdout %q, stderr %q", args, code, &stdout, &stderr)
 		}
 	}
@@ -48,7 +52,7 @@ func TestHistoryCompletion(t *testing.T) {
 		if code := Run(append(args, ""), &stdout, &stderr); code != 0 {
 			t.Fatalf("%v: exit %d, stderr %q", args, code, &stderr)
 		}
-		if got := strings.Fields(stdout.String()); !slices.Equal(got, []string{"audit", "rekey", ":4"}) {
+		if got := strings.Fields(stdout.String()); !slices.Equal(got, []string{"audit", "purge", "rekey", ":4"}) {
 			t.Fatalf("%v: completion %v", args, got)
 		}
 	}
