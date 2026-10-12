@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -49,12 +50,11 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				if err != nil {
 					return fmt.Errorf("find editor: %w", err)
 				}
-				shell, err := gitShell()
+				ctx := cmd.Context()
+				command, err := editorCommand(ctx, strings.TrimSpace(string(editor)), path)
 				if err != nil {
 					return err
 				}
-				ctx := cmd.Context()
-				command := exec.CommandContext(ctx, shell, "-c", strings.TrimSpace(string(editor))+` "$@"`, "git-age-edit", path)
 				command.Dir = options.directory
 				command.Stdin = cmd.InOrStdin()
 				command.Stdout = cmd.OutOrStdout()
@@ -91,4 +91,18 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 	recipientFlags(edit.Flags(), &recipients)
 	identityFlags(edit.Flags(), &identities)
 	return edit
+}
+
+// editorCommand runs a plain editor command directly, as Git does, and only
+// uses a shell for shell syntax. A shell such as dash that waits in front of
+// the editor would otherwise be killed by the Ctrl-C meant for the editor.
+func editorCommand(ctx context.Context, editor, path string) (*exec.Cmd, error) {
+	if fields := strings.Fields(editor); len(fields) != 0 && !strings.ContainsAny(editor, "|&;<>()$`\\\"'*?[#~=%") {
+		return exec.CommandContext(ctx, fields[0], append(fields[1:], path)...), nil
+	}
+	shell, err := gitShell()
+	if err != nil {
+		return nil, err
+	}
+	return exec.CommandContext(ctx, shell, "-c", editor+` "$@"`, "git-age-edit", path), nil
 }

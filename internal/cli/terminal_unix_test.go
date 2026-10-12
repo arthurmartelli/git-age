@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -34,7 +35,13 @@ func TestEditTerminalInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'" }
-	t.Setenv("GIT_EDITOR", quote(executable)+" -test.run=^TestInterruptEditor$ --")
+	// A plain editor command runs without a shell. Under dash, a shell waiting
+	// in front of the editor would be killed by the editor's Ctrl-C.
+	editor := filepath.Join(t.TempDir(), "editor")
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\nexec "+quote(executable)+" -test.run=^TestInterruptEditor$ -- \"$@\"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_EDITOR", editor)
 	t.Setenv("GIT_AGE_TEST_INTERRUPT_EDITOR", "save")
 	program := quote(binary) + " -C " + quote(directory) + " edit secret.env"
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
