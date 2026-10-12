@@ -113,6 +113,7 @@ func TestEdit(t *testing.T) {
 			if err != nil || len(entries) != 0 {
 				t.Fatalf("temporary files left behind: %v, %v", entries, err)
 			}
+			assertNoEditCopies(t, directory)
 			info, err := os.Stat(source)
 			if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 				t.Fatalf("original permissions: %v, %v", info, err)

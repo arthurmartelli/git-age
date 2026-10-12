@@ -86,12 +86,18 @@ COMMANDS
 
     edit FILE
         Edit a protected file in your editor. A locked file is decrypted
-        to a private temporary file and encrypted again after saving.
+        to a 0600 copy in a 0700 temporary directory under Git's metadata
+        directory, then encrypted again after saving. Outside Git, the
+        temporary directory is created beside the protected file.
 
         Uses Git's editor selection: GIT_EDITOR, core.editor, VISUAL,
         EDITOR, then Git's default. Unlocked files are edited in place.
         Unchanged contents keep the original ciphertext. Editor failures
         leave a locked original unchanged.
+
+        Ctrl-C is handled by the editor, whose exit status is reported.
+        SIGHUP and SIGTERM stop the editor and its children, then remove
+        the plaintext copy without changing the locked original.
 
         The temporary copy is overwritten once before removal. This is
         best-effort cleanup, not guaranteed erasure from SSDs, snapshots,
@@ -171,7 +177,7 @@ Global options:
     --version   print version
 
 Ctrl-C stops the command, prints `git-age: interrupted` to stderr and
-exits with status 130.
+exits with status 130. During `edit`, the editor handles Ctrl-C instead.
 
 
 PATHS

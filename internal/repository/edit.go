@@ -22,8 +22,19 @@ func Edit(directory string, file ProtectedFile, recipients, identities []string,
 	return err
 }
 
-func editPlaintext(path string, plaintext []byte, edit func(string) error) (content []byte, err error) {
-	directory, err := os.MkdirTemp("", "git-age-edit-")
+func editPlaintext(root, path string, plaintext []byte, edit func(string) error) (content []byte, err error) {
+	parent := filepath.Dir(path)
+	worktree, err := gitRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	if worktree != "" {
+		parent, err = gitPath(worktree, "")
+		if err != nil {
+			return nil, err
+		}
+	}
+	directory, err := os.MkdirTemp(parent, "git-age-edit-")
 	if err != nil {
 		return nil, err
 	}

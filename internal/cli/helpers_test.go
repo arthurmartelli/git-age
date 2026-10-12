@@ -121,6 +121,15 @@ func runGit(t *testing.T, directory string, args ...string) []byte {
 	return output
 }
 
+func assertNoEditCopies(t *testing.T, directory string) {
+	t.Helper()
+	gitDir := installGitPath(t, directory, "")
+	copies, err := filepath.Glob(filepath.Join(gitDir, "git-age-edit-*"))
+	if err != nil || len(copies) != 0 {
+		t.Fatalf("editor plaintext copies left behind: %v, %v", copies, err)
+	}
+}
+
 func newIdentity(t *testing.T) *age.X25519Identity {
 	t.Helper()
 	identity, err := age.GenerateX25519Identity()

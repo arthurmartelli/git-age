@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,6 +42,9 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				}
 			}
 			err = repository.Edit(options.directory, file, recipients, identities, options.dryRun, func(path string) error {
+				if err := cmd.Context().Err(); err != nil {
+					return err
+				}
 				editor, err := exec.Command("git", "-C", options.directory, "var", "GIT_EDITOR").Output()
 				if err != nil {
 					return fmt.Errorf("find editor: %w", err)
@@ -55,7 +59,15 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				command.Stdin = cmd.InOrStdin()
 				command.Stdout = cmd.OutOrStdout()
 				command.Stderr = cmd.ErrOrStderr()
-				if err := command.Run(); err != nil {
+				state, _ := ctx.Value(editorSignalKey{}).(*editorSignals)
+				if state == nil {
+					state = &editorSignals{}
+				}
+				if err := runEditor(ctx, command, state); err != nil {
+					var exit *exec.ExitError
+					if errors.As(err, &exit) {
+						return &editorExitError{err: err, code: processExitCode(exit)}
+					}
 					return err
 				}
 				return ctx.Err()

@@ -23,8 +23,26 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	root.SetErr(stderr)
 	root.SetArgs(args)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
+	editors := &editorSignals{}
+	ctx, cancel := context.WithCancelCause(context.WithValue(context.Background(), editorSignalKey{}, editors))
+	defer cancel(nil)
+	received := make(chan os.Signal, 1)
+	signal.Notify(received, commandSignals()...)
+	defer signal.Stop(received)
+	go func() {
+		for {
+			select {
+			case interrupt := <-received:
+				if interrupt == os.Interrupt && editors.forwardInterrupt() {
+					continue
+				}
+				cancel(&commandSignalError{interrupt})
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	// Editing a locked file creates a plaintext copy that must be wiped before
 	// main exits. Other commands retain the immediate exit behavior of SIGINT.
 	command, _, _ := root.Find(args)
@@ -36,14 +54,15 @@ func Run(args []string, stdout, stderr io.Writer) int {
 	case err = <-result:
 	case <-ctx.Done():
 		// A second Ctrl-C can force an exit while the editor cleans up.
-		stop()
+		signal.Stop(received)
 		if waitForCleanup {
-			<-result
+			err = <-result
 		}
 	}
-	if ctx.Err() != nil {
-		fmt.Fprintln(stderr, "git-age: interrupted")
-		return 130
+	var interruption *commandSignalError
+	if errors.As(context.Cause(ctx), &interruption) {
+		fmt.Fprintf(stderr, "git-age: %s\n", interruption)
+		return interruption.exitCode()
 	}
 	if err != nil {
 		if errors.Is(err, errCheckFailed) || errors.Is(err, errMergeConflict) {
@@ -51,6 +70,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		fmt.Fprintf(stderr, "git-age: %v\n", err)
+		var editor *editorExitError
+		if errors.As(err, &editor) {
+			return editor.code
+		}
 		return 2
 	}
 

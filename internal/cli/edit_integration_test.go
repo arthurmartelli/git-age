@@ -27,6 +27,7 @@ func TestEditReusesCommittedCiphertext(t *testing.T) {
 		t.Setenv("GIT_AGE_TEST_EDIT_AFTER", test.after)
 		t.Setenv("GIT_AGE_TEST_EDIT_STATUS", string(runGit(t, directory, "status", "--porcelain", "--untracked-files=all")))
 		mustCommand(t, directory, "edit", "secret.env")
+		assertNoEditCopies(t, directory)
 		assertDecrypts(t, readFile(t, directory, "secret.env"), identity, []byte(test.after))
 		if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
 			t.Fatalf("decrypted copies left behind: %v, %v", entries, err)
@@ -38,15 +39,47 @@ func TestEditReusesCommittedCiphertext(t *testing.T) {
 	runGit(t, directory, "diff", "--quiet", "--", "secret.env")
 }
 
+func TestEditReportsEditorExitStatus(t *testing.T) {
+	for _, source := range []string{"GIT_EDITOR", "EDITOR"} {
+		t.Run(source, func(t *testing.T) {
+			isolateHookEnvironment(t)
+			directory, _, ciphertext := cleanFixture(t, []byte("original\n"), false)
+			for _, name := range []string{"GIT_EDITOR", "VISUAL"} {
+				t.Setenv(name, "")
+				if err := os.Unsetenv(name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("EDITOR", "sh -c 'exit 7'")
+			if source == "GIT_EDITOR" {
+				t.Setenv("GIT_EDITOR", "sh -c 'exit 7'")
+			}
+			var stdout, stderr bytes.Buffer
+			if code := Run([]string{"-C", directory, "edit", "secret.env"}, &stdout, &stderr); code != 7 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "editor: exit status 7; secret.env was not changed") {
+				t.Fatalf("editor failure: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
+			}
+			if !bytes.Equal(ciphertext, readFile(t, directory, "secret.env")) {
+				t.Fatal("failed editor changed ciphertext")
+			}
+			assertNoEditCopies(t, directory)
+		})
+	}
+}
+
 func TestEditRoundTripEditor(t *testing.T) {
 	directory := os.Getenv("GIT_AGE_TEST_EDIT_REPO")
 	if directory == "" {
 		return
 	}
 	path := os.Args[len(os.Args)-1]
-	relative, err := filepath.Rel(directory, path)
-	if err != nil || relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
-		t.Fatalf("editor plaintext was inside repository: %s, %v", path, err)
+	gitDir, err := exec.Command("git", "-C", directory, "rev-parse", "--absolute-git-dir").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(filepath.Dir(path)))
+	expected, expectedErr := filepath.EvalSymlinks(filepath.FromSlash(strings.TrimSpace(string(gitDir))))
+	if err != nil || expectedErr != nil || parent != expected {
+		t.Fatalf("editor plaintext was outside Git metadata: %s, %v, %v", path, err, expectedErr)
 	}
 	if plaintext, err := os.ReadFile(path); err != nil || string(plaintext) != os.Getenv("GIT_AGE_TEST_EDIT_BEFORE") {
 		t.Fatalf("editor copy: %q, %v", plaintext, err)

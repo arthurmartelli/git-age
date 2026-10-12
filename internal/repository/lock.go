@@ -90,7 +90,7 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 		}
 		if options.edit != nil && !options.dryRun {
 			before := plaintext
-			plaintext, err = editPlaintext(file.Path, plaintext, options.edit)
+			plaintext, err = editPlaintext(root, path, plaintext, options.edit)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%w; %s was not changed", err, file.Path)
 			}

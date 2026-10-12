@@ -18,11 +18,11 @@ Pending work on the Go port before merging `go-port` into `main`.
 - [x] **Only disable reuse when the effective `[recipients]` change.** Any byte
   change to a parent `.gitage` (even a comment or a new `[files]` line) currently
   re-encrypts every file under it (`lock.go:368,410,427-440`).
-- [ ] **Keep `edit`'s plaintext copy out of the shared temp directory.** It uses
+- [x] **Keep `edit`'s plaintext copy out of the shared temp directory.** It uses
   `os.MkdirTemp("")` (`edit.go:26`). Put it in a 0700 directory under `.git` and
   clean it up on SIGHUP/SIGTERM. Then fix the "private temporary file" wording
   (`manual.txt:89`).
-- [ ] **Don't kill the editor on Ctrl-C.** `CommandContext` cancels the editor
+- [x] **Don't kill the editor on Ctrl-C.** `CommandContext` cancels the editor
   when the command is interrupted. Let the editor handle SIGINT and report
   its exit status.
 - [x] **Fix the release concurrency deadlock.** `release.yml` calls `test.yml`, and
@@ -85,7 +85,7 @@ Pending work on the Go port before merging `go-port` into `main`.
 
 - [x] `help`: topic matching, `--help` mentioning `git-age help`.
 - [ ] Plaintext push refusal message includes `GIT_AGE_ALLOW_PLAINTEXT_PUSH=1`.
-- [ ] `edit` with a failing editor reports the exit status and that the file was
+- [x] `edit` with a failing editor reports the exit status and that the file was
   not changed; also cover `EDITOR` (not just `GIT_EDITOR`).
 - [ ] `lock -i` outside Git with no `[recipients]` encrypts to your own identity.
 - [ ] `./path` arguments from a subdirectory.

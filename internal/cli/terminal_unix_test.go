@@ -3,8 +3,10 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -16,6 +18,81 @@ import (
 
 func detachTerminal(command *exec.Cmd) {
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+}
+
+func TestEditTerminalInterrupt(t *testing.T) {
+	script, err := exec.LookPath("script")
+	if err != nil {
+		t.Fatal("terminal editor tests require script")
+	}
+	binary := buildGitAge(t)
+	isolateHookEnvironment(t)
+	directory, identity, _ := cleanFixture(t, []byte("original\n"), false)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'" }
+	t.Setenv("GIT_EDITOR", quote(executable)+" -test.run=^TestInterruptEditor$ --")
+	t.Setenv("GIT_AGE_TEST_INTERRUPT_EDITOR", "save")
+	program := quote(binary) + " -C " + quote(directory) + " edit secret.env"
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	args := []string{"-q", "-e", "-c", program, "/dev/null"}
+	if runtime.GOOS == "darwin" {
+		args = []string{"-q", "/dev/null", "/bin/sh", "-c", program}
+	}
+	command := exec.CommandContext(ctx, script, args...)
+	command.Env = append(os.Environ(), "SHELL=/bin/sh")
+	command.WaitDelay = time.Second
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	command.Stdin = input
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(output)
+	waitFor := func(message string) {
+		t.Helper()
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("waiting for %q: %v, %q, stderr %q", message, err, line, &stderr)
+			}
+			if strings.Contains(line, message) {
+				return
+			}
+		}
+	}
+	waitFor("editor ready")
+	for range 2 {
+		if _, err := writer.Write([]byte{3}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor("editor handled interrupt")
+	}
+	if _, err := writer.WriteString("save\n"); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := command.Wait(); err != nil || ctx.Err() != nil || stderr.Len() != 0 {
+		t.Fatalf("terminal editor: %v, timeout %v, output %q, stderr %q", err, ctx.Err(), remaining, &stderr)
+	}
+	assertDecrypts(t, readFile(t, directory, "secret.env"), identity, []byte("saved\n"))
+	assertNoEditCopies(t, directory)
 }
 
 func TestInteractiveCommit(t *testing.T) {
