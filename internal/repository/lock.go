@@ -456,9 +456,9 @@ func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext
 			// have recipient history in Git that can justify reusing it.
 			if !checkedLegacy {
 				checkedLegacy = true
-				legacy = !k.external && rulesMatchRevision(root, target.rules, "HEAD")
+				legacy = !k.external && k.rulesMatchRevision(root, path, target, "HEAD")
 				if legacy {
-					stale, legacy = staleCiphertexts(root, path, target.rules)
+					stale, legacy = k.staleCiphertexts(root, path, target)
 				}
 			}
 			// Conflict sides use the same staged rules as a stage-zero candidate.
@@ -466,7 +466,7 @@ func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext
 			if strings.HasPrefix(revision, ":") {
 				ruleRevision = ""
 			}
-			if !legacy || !rulesMatchRevision(root, target.rules, ruleRevision) || slices.ContainsFunc(stale, func(old []byte) bool { return bytes.Equal(old, ciphertext) }) {
+			if !legacy || !k.rulesMatchRevision(root, path, target, ruleRevision) || slices.ContainsFunc(stale, func(old []byte) bool { return bytes.Equal(old, ciphertext) }) {
 				continue
 			}
 		}
@@ -478,65 +478,58 @@ func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext
 	return nil
 }
 
-func staleCiphertexts(root, path string, rules []string) ([][]byte, bool) {
+func (k keys) staleCiphertexts(root, path string, target fileTarget) ([][]byte, bool) {
 	relative, _ := filepath.Rel(root, path)
-	var stale [][]byte
-	for _, rule := range rules {
-		current, err := os.ReadFile(rule)
-		if err != nil {
-			continue // Absent both here and in HEAD.
-		}
-		_, currentRecipients, err := parseRules(rule, current)
-		if err != nil {
-			return nil, false
-		}
+	var rulePaths []string
+	for _, rule := range target.rules {
 		rulePath, _ := filepath.Rel(root, rule)
-		history, err := git(root, "log", "--format=%H", "--", filepath.ToSlash(rulePath))
-		if err != nil {
-			return nil, false
-		}
-		for _, revision := range strings.Fields(string(history)) {
-			old, err := git(root, "show", revision+":"+filepath.ToSlash(rulePath))
-			if err != nil {
-				return nil, false
-			}
-			_, oldRecipients, err := parseRules(rule, old)
-			if err != nil {
-				return nil, false
-			}
-			if sameRecipients(currentRecipients, oldRecipients) {
+		rulePaths = append(rulePaths, filepath.ToSlash(rulePath))
+	}
+	history, err := git(root, append([]string{"--literal-pathspecs", "log", "--format=%H", "HEAD", "--"}, rulePaths...)...)
+	if err != nil {
+		return nil, false
+	}
+	for _, commit := range strings.Fields(string(history)) {
+		for _, revision := range []string{commit, commit + "^"} {
+			if !hasCommit(root, revision) || k.rulesMatchRevision(root, path, target, revision) {
 				continue
 			}
 			if ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative)); err == nil {
-				stale = append(stale, ciphertext)
+				return [][]byte{ciphertext}, true
 			}
-			break
+			return nil, true
 		}
 	}
-	return stale, true
+	return nil, true
 }
 
-// rulesMatchRevision reports whether each working rule file equals its
-// version at revision, counting a file absent from both as equal.
-func rulesMatchRevision(root string, rules []string, revision string) bool {
-	for _, rule := range rules {
+// rulesMatchRevision compares effective recipients, including nested lists,
+// rather than patterns, comments or how recipients are split between files.
+func (k keys) rulesMatchRevision(root, path string, target fileTarget, revision string) bool {
+	rules := map[string][]byte{}
+	for _, rule := range target.rules {
 		rulePath, _ := filepath.Rel(root, rule)
-		current, readErr := os.ReadFile(rule)
-		previous, gitErr := git(root, "show", revision+":"+filepath.ToSlash(rulePath))
-		if errors.Is(readErr, os.ErrNotExist) && gitErr != nil {
-			continue
-		}
-		if readErr != nil || gitErr != nil || !bytes.Equal(current, previous) {
-			return false
+		if content, err := git(root, "show", revision+":"+filepath.ToSlash(rulePath)); err == nil {
+			rules[rule] = content
 		}
 	}
-	return true
+	previousKeys, err := resolveKeys(root, root, nil, k.identitySet, rules)
+	if err != nil || previousKeys.external || previousKeys.toIdentities != k.toIdentities {
+		// An implicit original encryptor or old external configuration cannot
+		// be reconstructed from Git. A local fingerprint can still prove reuse.
+		return false
+	}
+	previous, err := previousKeys.describeTarget(root, path, rules)
+	if err != nil {
+		return false
+	}
+	if k.toIdentities {
+		return sameRecipients(target.listed, previous.listed)
+	}
+	return sameRecipients(target.values, previous.values)
 }
 
 // sameRecipients compares recipient lists as sets.
 func sameRecipients(first, second []string) bool {
-	first, second = slices.Clone(first), slices.Clone(second)
-	slices.Sort(first)
-	slices.Sort(second)
-	return slices.Equal(slices.Compact(first), slices.Compact(second))
+	return recipientSetFingerprint(first) == recipientSetFingerprint(second)
 }

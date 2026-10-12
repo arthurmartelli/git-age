@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"filippo.io/age"
 )
 
 func TestExternalRecipientReuse(t *testing.T) {
@@ -115,5 +117,98 @@ func TestExternalRecipientsIncludeNestedLists(t *testing.T) {
 			assertDecrypts(t, fresh, identity, []byte("original\n"))
 			assertDecrypts(t, fresh, extra, []byte("original\n"))
 		})
+	}
+}
+
+func TestEffectiveRecipientReuse(t *testing.T) {
+	for _, change := range []string{"comment", "patterns", "reorder and duplicates", "empty nested recipients", "move to nested", "addition", "removal"} {
+		for _, stage := range []string{"working", "staged", "committed"} {
+			t.Run(change+"/"+stage, func(t *testing.T) {
+				isolateHookEnvironment(t)
+				plaintext := []byte("original\n")
+				directory, own, _ := cleanFixture(t, plaintext, false)
+				other, added := newIdentity(t), newIdentity(t)
+				rules := "[files]\n*.env\n[recipients]\n" + own.Recipient().String() + "\n" + other.Recipient().String() + "\n"
+				writeFile(t, directory, ".gitage", rules)
+				runGit(t, directory, "mv", "secret.env", "sub/secret.env")
+				// Simulate ciphertext from an older version or another clone,
+				// without any local recipient fingerprint.
+				var ciphertext bytes.Buffer
+				writer, err := age.Encrypt(&ciphertext, own.Recipient(), other.Recipient())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.Write(plaintext); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, directory, "sub/secret.env", ciphertext.String())
+				runGit(t, directory, "add", ".gitage", "sub/secret.env")
+				runGit(t, directory, "commit", "-qm", "two recipients")
+				switch change {
+				case "comment":
+					rules = "# useful comment\n" + rules
+				case "patterns":
+					rules = strings.Replace(rules, "*.env\n", "*.env\n*.secret\n", 1)
+				case "reorder and duplicates":
+					rules = "[files]\n*.env\n[recipients]\n" + other.Recipient().String() + "\n" + own.Recipient().String() + "\n" + own.Recipient().String() + "\n"
+				case "empty nested recipients":
+					writeFile(t, directory, "sub/.gitage", "# no recipient changes\n[files]\n*.secret\n")
+				case "move to nested":
+					rules = "[files]\n*.env\n[recipients]\n" + own.Recipient().String() + "\n"
+					writeFile(t, directory, "sub/.gitage", "[recipients]\n"+other.Recipient().String()+"\n")
+				case "addition":
+					rules += added.Recipient().String() + "\n"
+				case "removal":
+					rules = "[files]\n*.env\n[recipients]\n" + own.Recipient().String() + "\n"
+				}
+				writeFile(t, directory, ".gitage", rules)
+				if stage != "working" {
+					runGit(t, directory, "add", ".gitage", "sub")
+				}
+				if stage == "committed" {
+					runGit(t, directory, "commit", "-qm", "change rules")
+				}
+				changedRecipients := change == "addition" || change == "removal"
+				cleaned, _, err := runClean(directory, "sub/secret.env", plaintext)
+				want := ciphertext.Bytes()
+				if changedRecipients {
+					want = plaintext
+				}
+				if err != nil || !bytes.Equal(cleaned, want) {
+					t.Fatalf("clean after %s: %v, output %q", change, err, cleaned)
+				}
+				writeFile(t, directory, "sub/secret.env", string(plaintext))
+				mustCommand(t, directory, "lock")
+				locked := readFile(t, directory, "sub/secret.env")
+				if bytes.Equal(locked, ciphertext.Bytes()) == changedRecipients {
+					t.Fatalf("wrong reuse decision after %s", change)
+				}
+				assertDecrypts(t, locked, own, plaintext)
+				if change == "addition" {
+					assertDecrypts(t, locked, added, plaintext)
+				}
+				if change == "removal" {
+					assertCannotDecrypt(t, locked, other)
+				}
+			})
+		}
+	}
+}
+
+func TestPreCommitReusesAcrossUnstagedRuleComments(t *testing.T) {
+	isolateHookEnvironment(t)
+	directory, _, ciphertext := cleanFixture(t, []byte("original\n"), false)
+	rules := readFile(t, directory, ".gitage")
+	writeFile(t, directory, ".gitage", "# unstaged comment\n"+string(rules))
+	writeFile(t, directory, "secret.env", "original\n")
+	writeFile(t, directory, "note.txt", "unrelated change\n")
+	runGit(t, directory, "add", "secret.env", "note.txt")
+	t.Setenv("GIT_AGE_HOOK_MODE", "always-lock")
+	mustCommand(t, directory, "hook", "pre-commit")
+	if !bytes.Equal(ciphertext, runGit(t, directory, "show", ":secret.env")) {
+		t.Fatal("unstaged rule comment prevented pre-commit reuse")
 	}
 }

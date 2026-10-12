@@ -3,7 +3,6 @@ package repository
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -48,7 +47,7 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 		if err != nil {
 			return result, fmt.Errorf("%s: %w", file.Path, err)
 		}
-		ciphertext, err := keys.encrypt(root, path, target, original, workingRulesMatchIndex(target.rules, check.rules), true)
+		ciphertext, err := keys.encrypt(root, path, target, original, true, true)
 		if err != nil {
 			return result, err
 		}
@@ -83,26 +82,6 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 	}
 	result.MadeEmpty = len(head) != 0 && !bytes.Equal(initial, head) && bytes.Equal(final, head)
 	return result, nil
-}
-
-func workingRulesMatchIndex(paths []string, indexed map[string][]byte) bool {
-	for _, path := range paths {
-		info, err := os.Lstat(path)
-		if os.IsNotExist(err) || err == nil && !info.Mode().IsRegular() {
-			if _, exists := indexed[path]; exists {
-				return false
-			}
-			continue
-		}
-		if err != nil {
-			return false
-		}
-		content, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(content, indexed[path]) {
-			return false
-		}
-	}
-	return true
 }
 
 func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]byte) ([]string, error) {

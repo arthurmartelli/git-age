@@ -640,6 +640,10 @@ encryption once before their ciphertext can be reused.
 
 Ciphertext is not reused after the recipient list changes.
 
+Comments, file-pattern edits, recipient reordering and duplicate entries
+do not prevent reuse. Nested lists are compared as part of the effective
+recipient set for each file.
+
 If recipients were changed through:
 
     -r

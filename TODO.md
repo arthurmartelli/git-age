@@ -15,7 +15,7 @@ Pending work on the Go port before merging `go-port` into `main`.
   `age.recipient`.** `external` disables reuse (`lock.go:154-169`, `lock.go:289`,
   `clean.go:59`), so every `lock` rewrites files, unchanged unlocked files show
   as modified, and unrelated commits re-encrypt secrets.
-- [ ] **Only disable reuse when the effective `[recipients]` change.** Any byte
+- [x] **Only disable reuse when the effective `[recipients]` change.** Any byte
   change to a parent `.gitage` (even a comment or a new `[files]` line) currently
   re-encrypts every file under it (`lock.go:368,410,427-440`).
 - [ ] **Keep `edit`'s plaintext copy out of the shared temp directory.** It uses
@@ -90,5 +90,5 @@ Pending work on the Go port before merging `go-port` into `main`.
 - [ ] `lock -i` outside Git with no `[recipients]` encrypts to your own identity.
 - [ ] `./path` arguments from a subdirectory.
 - [ ] Unknown shell message for `completion`.
-- [ ] Ciphertext reuse with external recipients and after a comment-only
+- [x] Ciphertext reuse with external recipients and after a comment-only
   `.gitage` change (regression tests for the items above).
