@@ -212,3 +212,39 @@ func TestPreCommitReusesAcrossUnstagedRuleComments(t *testing.T) {
 		t.Fatal("unstaged rule comment prevented pre-commit reuse")
 	}
 }
+
+func TestHistoryRekeyRecordsExternalRecipients(t *testing.T) {
+	for _, source := range []string{"flag", "environment", "config"} {
+		t.Run(source, func(t *testing.T) {
+			isolateHookEnvironment(t)
+			plaintext := []byte("original\n")
+			directory, identity, _ := cleanFixture(t, plaintext, false)
+			var flags []string
+			switch source {
+			case "flag":
+				flags = []string{"-r", identity.Recipient().String()}
+			case "environment":
+				t.Setenv("GIT_AGE_RECIPIENT", identity.Recipient().String())
+			case "config":
+				writeFile(t, directory, ".gitage", "[files]\n*.env\n")
+				runGit(t, directory, "add", ".gitage")
+				runGit(t, directory, "commit", "-qm", "use configured recipients")
+				runGit(t, directory, "config", "age.recipient", identity.Recipient().String())
+			}
+			before := installSnapshot(t, directory)
+			mustCommand(t, directory, "history", append([]string{"rekey", "--yes", "-n"}, flags...)...)
+			assertSnapshotUnchanged(t, directory, before)
+			mustCommand(t, directory, "history", append([]string{"rekey", "--yes"}, flags...)...)
+			ciphertext := runGit(t, directory, "show", "HEAD:secret.env")
+			mustCommand(t, directory, "unlock")
+			if source == "flag" {
+				// Match the explicit recipient for the filter's independent run.
+				t.Setenv("GIT_AGE_RECIPIENT", identity.Recipient().String())
+			}
+			cleaned, _, err := runClean(directory, "secret.env", plaintext)
+			if err != nil || !bytes.Equal(cleaned, ciphertext) {
+				t.Fatalf("history ciphertext was not reusable: %v", err)
+			}
+		})
+	}
+}
