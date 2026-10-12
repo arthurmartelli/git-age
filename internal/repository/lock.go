@@ -137,6 +137,7 @@ type keys struct {
 	root         string
 	rules        map[string][]byte
 	listed       *[]string // Every [recipients] entry in the repository, once read.
+	cachePruned  *bool     // Prune at most once per encryption operation.
 }
 
 var errNoKey = errors.New("no encryption key configured; use -r, [recipients], or an age identity")
@@ -157,7 +158,7 @@ func loadKeys(directory, root string, explicitRecipients, identityPaths []string
 
 // resolveKeys finds the base recipients; the first source that is set wins.
 func resolveKeys(directory, root string, explicitRecipients []string, identities identitySet, rules map[string][]byte) (keys, error) {
-	k := keys{identitySet: identities, root: root, rules: rules, listed: new([]string)}
+	k := keys{identitySet: identities, root: root, rules: rules, listed: new([]string), cachePruned: new(bool)}
 	top := filepath.Join(root, ".gitage")
 	var err error
 	switch environment := os.Getenv("GIT_AGE_RECIPIENT"); {

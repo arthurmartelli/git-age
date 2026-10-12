@@ -542,7 +542,7 @@ Run:
     $ git-age uninstall
 
 This removes the hooks, Git attributes and repository configuration
-installed by `git-age`.
+installed by `git-age`, and the ciphertext recipient cache.
 
 Use `git-age -n uninstall` to preview the removals. Hooks belonging to
 other tools and attributes outside the generated block are kept.
@@ -668,6 +668,12 @@ git-age records a recipient fingerprint for ciphertext it creates under
 or plaintext, and let Git's clean filter verify the current recipients.
 Without a record, externally configured recipients require fresh
 encryption once before their ciphertext can be reused.
+
+Encryption prunes cache entries older than 30 days when their ciphertext
+is absent from the index, HEAD and protected locked working-tree files.
+All index stages are retained during conflicts. The 30-day grace period
+keeps recent ciphertext on other branches or in the stash through branch
+switches. `uninstall` removes the cache directory.
 
 Ciphertext is not reused after the recipient list changes.
 

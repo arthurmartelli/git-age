@@ -23,12 +23,12 @@ Pending work on the Go port before merging `go-port` into `main`.
   empty.
 - [x] Handle lone `\r` line endings in `.gitage` (`files.go:224`); they currently
   error.
-- [ ] The ciphertext fingerprint cache in `.git/git-age/recipients`
+- [x] The ciphertext fingerprint cache in `.git/git-age/recipients`
   (`repository/recipients_cache.go`) gains one file per encryption and is never
   pruned. `uninstall` doesn't remove it either. When pruning, keep entries for
   ciphertext in the index (all stages), HEAD, and locked protected files in the
   working tree, since `lock` records the fingerprint before the file is staged.
-  Also keep entries newer than a grace period (e.g. 30 days), so ciphertext on
+  Also keep entries newer than a 30-day grace period, so ciphertext on
   other branches or in the stash survives a branch switch. Remove the directory
   on uninstall.
 - [x] Tolerate a BEGIN marker without END in `.git/info/attributes`

@@ -80,6 +80,9 @@ func TestUninstall(t *testing.T) {
 				writeFile(t, workingDirectory, ".gitage", "[unknown]\n")
 			}
 			beforeIndex := runGit(t, workingDirectory, "ls-files", "--stage", "-z")
+			cache := installGitPath(t, workingDirectory, "git-age/recipients")
+			writeFile(t, cache, "fingerprint", "cache record")
+			writeFile(t, filepath.Dir(cache), "keep", "other metadata")
 			beforeFiles := map[string][]byte{}
 			for _, name := range []string{"locked.env", "unlocked.env", ".gitage", ".gitage.key"} {
 				data, err := os.ReadFile(filepath.Join(workingDirectory, name))
@@ -97,6 +100,12 @@ func TestUninstall(t *testing.T) {
 			output, err := runCommand(workingDirectory, "uninstall")
 			if err != nil || !strings.Contains(output, "uninstalled Git integration") {
 				t.Fatalf("uninstall: %v, %s", err, output)
+			}
+			if _, err := os.Lstat(cache); !os.IsNotExist(err) {
+				t.Fatalf("recipient cache remains: %v", err)
+			}
+			if got := readFile(t, filepath.Dir(cache), "keep"); string(got) != "other metadata" {
+				t.Fatal("uninstall removed unrelated git-age metadata")
 			}
 			keptConfig := "Kept user Git config: age.keyFile, age.recipient, age.trustedRecipients\n"
 			if !strings.Contains(output, keptConfig) {
@@ -235,6 +244,10 @@ func TestUninstallDryRunAndPreflight(t *testing.T) {
 			case "disabled hooks":
 				runGit(t, directory, "config", "core.hooksPath", os.DevNull)
 				want = "uninstalled Git integration"
+			}
+			cache := installGitPath(t, directory, "git-age/recipients")
+			if scenario != "missing installation" {
+				writeFile(t, cache, "fingerprint", "cache record")
 			}
 			before := installSnapshot(t, directory)
 			output, err := runCommand(directory, "uninstall", args...)

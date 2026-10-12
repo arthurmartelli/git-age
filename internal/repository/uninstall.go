@@ -69,6 +69,17 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 			return writeInstallFile(attributes, updated, mode)
 		}})
 	}
+	cache, err := gitPath(root, "git-age/recipients")
+	if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(cache); err == nil {
+		steps = append(steps, installStep{"remove ciphertext recipient cache: " + cache, func() error {
+			return os.RemoveAll(cache)
+		}})
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	// Only remove the local keys install writes, preserving identities,
 	// recipients, trust settings and configuration inherited from other files.
 	output, err := git(root, "config", "--local", "--null", "--list")

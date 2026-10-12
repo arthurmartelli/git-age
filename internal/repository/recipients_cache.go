@@ -1,15 +1,20 @@
 package repository
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"filippo.io/age/plugin"
 )
+
+const recipientCacheGrace = 30 * 24 * time.Hour
 
 func ciphertextHash(ciphertext []byte) string {
 	return fmt.Sprintf("%x", sha256.Sum256(ciphertext))
@@ -52,6 +57,12 @@ func (k keys) rememberCiphertext(root string, target fileTarget, ciphertext []by
 	if err != nil {
 		return err
 	}
+	if !*k.cachePruned {
+		if err := pruneRecipientCache(root, directory, time.Now()); err != nil {
+			return fmt.Errorf("prune ciphertext recipients: %w", err)
+		}
+		*k.cachePruned = true
+	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
@@ -65,4 +76,121 @@ func (k keys) rememberCiphertext(root string, target fileTarget, ciphertext []by
 		return fmt.Errorf("record ciphertext recipients: %w", err)
 	}
 	return nil
+}
+
+// Prune only expired, unreachable records. The grace period preserves recent
+// ciphertext on other branches or in the stash without walking all history.
+func pruneRecipientCache(root, directory string, now time.Time) error {
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	cutoff := now.Add(-recipientCacheGrace)
+	var expired []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if len(name) != sha256.Size*2 || strings.Trim(name, "0123456789abcdef") != "" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() && info.ModTime().Before(cutoff) {
+			expired = append(expired, name)
+		}
+	}
+	if len(expired) == 0 {
+		return nil
+	}
+	live, err := liveCiphertextHashes(root)
+	if err != nil {
+		return err // Don't remove anything if the retention set couldn't be read.
+	}
+	for _, name := range expired {
+		if live[name] {
+			continue
+		}
+		path := filepath.Join(directory, name)
+		// Another process may have refreshed or removed the record meanwhile.
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() && info.ModTime().Before(cutoff) {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func liveCiphertextHashes(root string) (map[string]bool, error) {
+	output, err := git(root, "ls-files", "--stage", "-z")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := stageEntries(output)
+	if err != nil {
+		return nil, err
+	}
+	oids := map[string]bool{}
+	for _, entry := range entries {
+		if regularMode(entry.mode) || entry.mode == "120000" {
+			oids[entry.oid] = true // Includes stages 1, 2 and 3 during conflicts.
+		}
+	}
+	head, err := git(root, "rev-parse", "--verify", "--quiet", "HEAD^{tree}")
+	if err != nil && !exitCode(err, 1) {
+		return nil, err
+	}
+	if err == nil {
+		output, err := git(root, "ls-tree", "-r", "-z", strings.TrimSpace(string(head)))
+		if err != nil {
+			return nil, err
+		}
+		for _, record := range bytes.Split(output, []byte{0}) {
+			header, _, _ := strings.Cut(string(record), "\t")
+			fields := strings.Fields(header)
+			if len(fields) == 3 && fields[1] == "blob" {
+				oids[fields[2]] = true
+			}
+		}
+	}
+	reader, err := newObjectReader(root)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.close()
+	live := map[string]bool{}
+	for oid := range oids {
+		content, err := reader.read(oid)
+		if err != nil {
+			return nil, err
+		}
+		if contentState(content) == Locked {
+			live[ciphertextHash(content)] = true
+		}
+	}
+	files, err := ProtectedFiles(root, nil)
+	if err != nil && !errors.Is(err, ErrNoRules) {
+		return nil, err
+	}
+	for _, file := range files {
+		content, err := os.ReadFile(nativePath(root, file.Path))
+		if err != nil {
+			return nil, err
+		}
+		if contentState(content) == Locked {
+			live[ciphertextHash(content)] = true
+		}
+	}
+	return live, nil
 }
