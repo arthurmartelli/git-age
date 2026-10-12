@@ -434,7 +434,7 @@ func findLeaks(h *history) (Leaks, error) {
 				return leaks, err
 			}
 			plaintext := len(content) != 0 && contentState(content) == Unlocked
-			state = blobState{plaintext, plaintext && bytes.Contains(content, []byte("AGE-SECRET-KEY-"))}
+			state = blobState{plaintext, plaintext && containsPrivateIdentity(content)}
 			blobs[v.oid] = state
 		}
 		commits := introduced[v]

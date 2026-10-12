@@ -158,7 +158,7 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		file.State = contentState(content)
 	}
 	for path, content := range changed {
-		if filepath.Base(path) == ".gitage.key" || (result.HasRules && !protected[path] && bytes.Contains(content, []byte("AGE-SECRET-KEY-"))) {
+		if filepath.Base(path) == ".gitage.key" || (result.HasRules && !protected[path] && containsPrivateIdentity(content)) {
 			result.PrivateKeys = append(result.PrivateKeys, path)
 		}
 	}

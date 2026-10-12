@@ -39,6 +39,10 @@ func configValues(directory, key string, flags ...string) ([]string, error) {
 
 var errNoIdentity = errors.New("no identity configured; use -i or generate a key with git-age keygen")
 
+func containsPrivateIdentity(content []byte) bool {
+	return bytes.Contains(content, []byte("AGE-SECRET-KEY-")) || bytes.Contains(content, []byte("AGE-PLUGIN-"))
+}
+
 // identitySet holds the user's identities and the recipients they decrypt for.
 type identitySet struct {
 	identities []age.Identity

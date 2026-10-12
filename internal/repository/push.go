@@ -166,7 +166,7 @@ func CheckPush(directory, remote string, input io.Reader) (PushCheck, error) {
 			if err != nil {
 				return result, err
 			}
-			state = blobState{len(content) == 0, contentState(content) == Locked, bytes.Contains(content, []byte("AGE-SECRET-KEY-"))}
+			state = blobState{len(content) == 0, contentState(content) == Locked, containsPrivateIdentity(content)}
 			states[version.oid] = state
 		}
 		if filepath.Base(version.path) == ".gitage.key" || hasRules && !state.locked && state.privateKey {

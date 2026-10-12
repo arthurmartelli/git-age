@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arthurmartelli/git-age/internal/repository"
+
 	"filippo.io/age"
 	"filippo.io/age/plugin"
 )
@@ -147,5 +149,37 @@ func TestPluginExcludedIdentity(t *testing.T) {
 	assertCannotDecrypt(t, ciphertext, own)
 	if status := mustCommand(t, directory, "status", "--porcelain"); status != "LN secret.env\n" {
 		t.Fatalf("excluded plugin identity status: %q", status)
+	}
+}
+
+func TestNewIdentityTypesKeepKeyLeakChecks(t *testing.T) {
+	native := newIdentity(t)
+	hybrid, err := age.GenerateHybridIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{hybrid.String(), plugin.EncodeIdentity("gitagetest", []byte(native.String()))} {
+		t.Run(strings.SplitN(key, "1", 2)[0], func(t *testing.T) {
+			isolateHookEnvironment(t)
+			directory, _, _ := cleanFixture(t, []byte("original\n"), false)
+			writeFile(t, directory, "token.key", key+"\n")
+			runGit(t, directory, "add", "token.key")
+			output, err := runCommand(directory, "hook", "pre-commit")
+			if err == nil || !strings.Contains(output, "refusing to commit private age keys") || !strings.Contains(output, "token.key") {
+				t.Fatalf("private identity wasn't refused: %v, %s", err, output)
+			}
+			// Simulate a bypassed hook, then verify outgoing history and audit.
+			runGit(t, directory, "commit", "-qm", "bypassed key check")
+			head := gitRevision(t, directory, "HEAD")
+			update := "refs/heads/main " + head + " refs/heads/main " + strings.Repeat("0", len(head)) + "\n"
+			check, err := repository.CheckPush(directory, "origin", strings.NewReader(update))
+			if err != nil || len(check.PrivateKeys) != 1 || check.PrivateKeys[0] != "token.key" {
+				t.Fatalf("push missed private identity: %v, %v", check.PrivateKeys, err)
+			}
+			output, err = runCommand(directory, "history", "audit")
+			if err == nil || !strings.Contains(output, "Private age keys committed to Git history:") || !strings.Contains(output, "token.key") {
+				t.Fatalf("history audit missed private identity: %v, %s", err, output)
+			}
+		})
 	}
 }
