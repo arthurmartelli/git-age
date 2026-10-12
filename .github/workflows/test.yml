@@ -5,12 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-test
   cancel-in-progress: true
 
 jobs:
@@ -20,40 +21,36 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        # The oldest supported Python and the newest release.
-        python: ["3.9", "3.x"]
-        include:
-          # Safe replacement has its own code paths on macOS and Windows.
-          - os: macos-latest
-            python: "3.x"
-          - os: windows-latest
-            python: "3.x"
+        os: [ubuntu-latest, macos-latest, windows-latest]
     defaults:
       run:
         shell: bash
+    env:
+      CGO_ENABLED: "0"
     steps:
-      # Keep the scripts' LF line endings, which bash needs.
+      # Bash requires LF line endings.
       - name: Disable CRLF conversion
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          go-version: '1.25.x'
+          check-latest: true
+          cache: false
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq age zsh fish acl attr
+      # Use a current Bash for the completion tests.
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
           HOMEBREW_NO_INSTALL_CLEANUP: 1
-        # The test needs a newer bash than macOS's 3.2.
         run: brew install age bash fish
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
@@ -66,10 +63,12 @@ jobs:
           echo "$AGE_SHA256  age.zip" | sha256sum -c -
           unzip -q age.zip
           echo "$RUNNER_TEMP\\age" >>"$GITHUB_PATH"
-      - name: Test
-        run: ./git-age-test.sh
+      - name: Vet
+        run: go vet ./...
+      - name: Go tests
+        run: go test ./...
 
-  # The one check the main branch ruleset requires, whatever the matrix.
+  # Branch protection needs one stable check name across matrix changes.
   tests:
     if: always()
     needs: test

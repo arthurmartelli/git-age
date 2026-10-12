@@ -1,0 +1,1129 @@
+git-age
+=======
+
+Keep secrets in Git, encrypted with age.
+
+A `.gitage` file defines which files are protected and who can decrypt
+them. Private keys stay outside the repository.
+
+
+QUICK START
+-----------
+
+Create a `.gitage` file:
+
+    $ printf '[files]\nsecret.env\n' > .gitage
+
+Generate a key and install the Git integration:
+
+    $ git-age keygen
+    $ git-age install
+
+Encrypt protected files and commit them:
+
+    $ git-age lock
+    $ git add -A
+    $ git commit
+
+Decrypt them when you need to work on them:
+
+    $ git-age unlock
+
+Move your private key outside the repository:
+
+    $ mkdir -p ~/.config/git-age
+    $ mv .gitage.key ~/.config/git-age/myrepo.key
+    $ git config age.keyFile ~/.config/git-age/myrepo.key
+
+
+EVERYDAY USE
+------------
+
+The main commands are:
+
+    status      show whether protected files are locked or unlocked
+    lock        encrypt protected files
+    unlock      decrypt protected files
+    edit        edit one protected file without leaving it unlocked
+    rekey       re-encrypt files for the current recipients
+
+A typical workflow is:
+
+    $ git-age unlock
+
+    # edit files
+
+    $ git add -A
+    $ git commit
+
+When the Git hooks are installed, git-age checks protected files before
+they are committed.
+
+To edit one protected file without unlocking it in the working tree:
+
+    $ git-age edit secret.env
+
+
+COMMANDS
+--------
+
+    status
+        Show each protected file as LOCKED, UNLOCKED or UNKNOWN.
+
+    lock [PATH...]
+        Encrypt protected files.
+
+        Warn if locked files still use earlier recipients. Run `rekey`
+        and `git add` for the files named in the warning.
+
+    unlock [PATH...]
+        Decrypt protected files.
+
+    rekey [PATH...]
+        Encrypt protected plaintext and freshly re-encrypt locked files
+        for the current recipients. Existing ciphertext is never reused.
+
+        Decrypted contents stay in memory. Files outside your configured
+        access are skipped with a warning. Other decryption failures
+        abort the operation before any file is changed.
+
+    edit FILE
+        Edit a protected file in your editor. A locked file is decrypted
+        to a 0600 copy in a 0700 temporary directory under Git's metadata
+        directory, then encrypted again after saving. Outside Git, the
+        temporary directory is created beside the protected file.
+
+        Uses Git's editor selection: GIT_EDITOR, core.editor, VISUAL,
+        EDITOR, then Git's default. Unlocked files are edited in place.
+        Unchanged contents keep the original ciphertext. Editor failures
+        leave a locked original unchanged.
+
+        Ctrl-C is handled by the editor, whose exit status is reported.
+        SIGHUP and SIGTERM stop the editor and its children, then remove
+        the plaintext copy without changing the locked original.
+
+        The temporary copy is overwritten once before removal. This is
+        best-effort cleanup, not guaranteed erasure from SSDs, snapshots,
+        or copies made by the editor. Forced termination can leave the
+        temporary copy behind.
+
+    check [PATH...]
+        Fail if a selected protected file is unlocked.
+
+        `--staged` checks the index contents using the staged `.gitage`
+        rules, including selected files unchanged since the last commit.
+        It also rejects stale recipients, including recipient changes
+        committed earlier. Rekey affected files and stage the result.
+        Private-key and removed-rule checks still cover all staged changes.
+
+    install
+        Install Git hooks, readable diffs, clean-status support and the
+        merge driver.
+        `--hook-mode` selects the pre-commit policy: interactive,
+        always-lock, or abort.
+        Warn if the git-age executable is missing from PATH, since hooks
+        run `git age`. Add its directory to PATH before using the hooks.
+
+    uninstall
+        Remove the Git integration installed by git-age.
+
+        Keys, `.gitage` files and protected files are left unchanged.
+
+    keygen
+        Generate an age identity.
+
+    trust
+        Trust the current `[recipients]` lists.
+
+        `--show` displays the current recipients, trust status and changes
+        since approval without approving anything.
+        `--hash` prints only the current recipient-list hash for scripts.
+
+    history
+        Inspect or rewrite protected files in Git history.
+
+    history audit [REV...]
+        Search Git history for protected files committed as plaintext
+        or for committed private keys.
+
+        With no revisions, search all refs except history-rewrite backups.
+        `--reflog` also searches commits kept only by reflogs.
+
+    history rekey
+        Rewrite local branches, tags and the stash to encrypt protected
+        files for the current recipients. Takes no paths or revisions.
+
+        `--plaintext-only` keeps existing ciphertext.
+        `--keep-undecryptable` keeps versions you cannot decrypt.
+        `--yes` skips confirmation. Use `--dry-run` to preview changes.
+
+    history purge PATH ...
+    history purge --all
+        Remove selected paths from local branches, tags and the stash.
+        `--all` removes every version of all protected files.
+        `--yes` skips confirmation. Use `--dry-run` to preview changes.
+
+    completion SHELL
+        Print completion for bash, zsh or fish.
+
+    help [TOPIC|COMMAND...]
+        Show this manual, one section, or a command's options.
+        For example: `git-age help history rekey`.
+
+        Topics accept section words and unique prefixes in any case:
+        `help hooks`, `help team`, `help INTEG`. Unknown or ambiguous
+        topics list the available sections and commands. Exact command
+        names win: `help trust` shows command options; use
+        `help recipient-trust` for the manual section.
+
+        On a terminal, use GIT_PAGER, then PAGER, then `less -FRX`.
+        An empty pager setting or `cat` disables paging. Output to a
+        pipe or file is printed directly. If neither variable is set and
+        less is missing, help is printed directly.
+
+
+Global options:
+
+    -C DIR      run in DIR
+    -n          dry run
+    -v          verbose
+    --version   print version
+
+Ctrl-C stops the command, prints `git-age: interrupted` to stderr and
+exits with status 130. During `edit`, the editor handles Ctrl-C instead.
+
+
+PATHS
+-----
+
+`lock`, `unlock`, `rekey`, `status` and `check` accept optional paths:
+
+    $ git-age status secrets/
+    $ git-age lock config/app.yaml
+    $ git-age check --staged config/app.yaml
+
+Paths are relative to `-C`, like Git paths.
+
+Only files protected by `.gitage` are affected. Passing a path that
+matches no protected file is an error.
+
+`lock`, `unlock` and `rekey` are transactional: either every selected
+file eligible for the operation is changed or none of them are.
+
+These commands print a summary with changed, unchanged and skipped
+counts. Use `--verbose` for per-file details.
+
+Use `--dry-run` to preview the outcome without changing files. Dry runs
+check identities, recipients and decryption, so they report inaccessible
+files and failures just as the real operation would. Use `--verbose`
+with `--dry-run` to list each file's expected outcome.
+
+File permissions, ACLs and extended attributes are preserved.
+
+
+.GITAGE
+-------
+
+Example:
+
+    # comments start with '#'
+
+    [files]
+    *.tfvars
+    config/*.yaml
+    secrets/**
+    !public.tfvars
+
+    [recipients]
+    # Alice
+    age1alice...
+
+    # Bob
+    ssh-ed25519 AAAA... bob@laptop
+
+
+[files]
+~~~~~~~
+
+`.gitage` accepts LF, CRLF and CR line endings, including mixed endings.
+
+`[files]` uses gitignore-style patterns.
+
+Supported syntax includes:
+
+    *           match within one directory
+    **          match across directories
+    ?           match one character
+    [...]       character classes, such as [a-z] or [[:digit:]]
+    !pattern    exclude a previous match
+    /pattern    anchor at this `.gitage`
+    directory/  match a directory
+
+The last matching pattern wins. As in Git, a file inside a protected
+directory stays protected, so `!pattern` cannot exclude it: protect
+`secrets/**` rather than `secrets/` to exclude files in `secrets/`.
+
+Patterns ignore case when Git's `core.ignoreCase` is set. A pattern Git
+would never match, such as one with an unterminated `[`, is an error.
+
+Escape a pattern that looks like a section name:
+
+    \[files]
+
+
+Nested .gitage files
+~~~~~~~~~~~~~~~~~~~~
+
+A `.gitage` file in a subdirectory adds rules for that directory.
+
+For example:
+
+    .gitage
+    prod/.gitage
+
+Rules in `prod/.gitage` apply below `prod/` and can override parent
+rules.
+
+Nested `[recipients]` are added to the parent recipients. This lets a
+team receive access to one part of a repository without receiving access
+to everything.
+
+
+[recipients]
+~~~~~~~~~~~~
+
+`[recipients]` is optional.
+
+Each line contains one age recipient or SSH public key:
+
+    age1...
+    ssh-ed25519 AAAA...
+
+Native X25519, hybrid post-quantum, tagged and plugin recipients are
+supported. Plugin recipients require the matching `age-plugin-NAME`
+executable on PATH. Age enforces compatible recipient types, including
+its restriction on mixing post-quantum and classical recipients.
+
+If recipients are not configured, git-age encrypts to your identities.
+
+
+WHAT GETS PROTECTED
+-------------------
+
+Inside Git, git-age considers:
+
+* tracked files; and
+* untracked files that are not ignored.
+
+`.gitage` and `.gitage.key` are never protected.
+
+Symlinked `.gitage` files are ignored.
+
+Invalid configuration, including unknown sections, is an error.
+
+
+KEYS
+----
+
+Identities
+~~~~~~~~~~
+
+Identities are private keys used to decrypt files.
+
+Identity files may contain native X25519, hybrid post-quantum or
+`AGE-PLUGIN-...` identities. Unencrypted SSH private keys are also
+supported. Plugins can request PINs or hardware confirmation through the
+terminal. With no recipients configured, plugin identities are passed
+to their plugin for encryption, without exposing their private encoding.
+
+The first configured source wins:
+
+    1. -i / --identity
+    2. GIT_AGE_KEY_FILE
+    3. git config age.keyFile
+    4. .gitage.key at the repository root
+
+`-i` and `age.keyFile` may be repeated.
+
+`GIT_AGE_KEY_FILE` accepts multiple paths separated by `:`.
+
+Empty entries in the environment list are ignored. Duplicate paths,
+including symbolic-link aliases, load an identity file only once.
+`~` and `~/...` expand to your home directory in all identity sources.
+
+
+Recipients
+~~~~~~~~~~
+
+Recipients define who new ciphertext is encrypted to.
+
+The first configured source wins:
+
+    1. -r / --recipient
+    2. GIT_AGE_RECIPIENT
+    3. [recipients] in the top-level .gitage
+    4. git config age.recipient
+    5. your identities
+
+Nested `[recipients]` are always added.
+
+Hooks cannot receive command-line options, so their lookup starts with
+environment variables.
+
+Private key files must not require a passphrase. git-age refuses keys
+that would require interactive prompting for every file.
+
+A protected file can be opened when any configured identity matches one
+of its recipients.
+
+
+CONFIGURATION
+-------------
+
+git-age uses normal Git configuration.
+
+For every age setting, an empty or whitespace-only value clears earlier
+values. Later nonempty values still apply. Boolean settings use explicit
+values such as `true` or `false`; a valueless setting clears earlier ones.
+
+It can therefore be configured per repository, globally, or through
+Git's `includeIf` support.
+
+Available settings:
+
+    age.keyFile
+        Path to an identity.
+
+        Multiple values are combined. An empty value clears earlier
+        values.
+
+    age.recipient
+        Recipient used for encryption.
+
+    age.hookMode
+        Pre-commit behavior:
+
+            interactive
+            always-lock
+            abort
+
+    age.unlockAfterCommit
+        Whether protected files should be unlocked after committing.
+
+    age.trustedRecipients
+        Trusted recipient-list hash written by `git-age trust`.
+
+
+Environment variables override Git configuration:
+
+    GIT_AGE_KEY_FILE
+    GIT_AGE_RECIPIENT
+    GIT_AGE_HOOK_MODE
+    GIT_AGE_UNLOCK_AFTER_COMMIT
+    GIT_AGE_TRUSTED_RECIPIENTS
+
+Safety checks can also be overridden explicitly:
+
+    GIT_AGE_ALLOW_EMPTY
+    GIT_AGE_ALLOW_PRIVATE_KEYS
+    GIT_AGE_ALLOW_STALE_RECIPIENTS
+    GIT_AGE_ALLOW_REMOVE
+    GIT_AGE_ALLOW_PLAINTEXT_PUSH
+
+Boolean values accept:
+
+    1 / 0
+    true / false
+    yes / no
+    on / off
+
+Unset or blank GIT_AGE_ALLOW_* variables mean false. Invalid values are
+reported before a command changes files or the index.
+
+
+GIT HOOKS
+---------
+
+`git-age install` installs hooks that help prevent plaintext secrets from
+being committed or pushed.
+
+Choose the pre-commit policy when installing:
+
+    $ git-age install --hook-mode=always-lock
+
+
+Pre-commit
+~~~~~~~~~~
+
+When a protected file is staged as plaintext, the pre-commit hook uses
+the configured hook mode:
+
+    interactive
+        Ask whether to encrypt, abort, or commit plaintext.
+
+        This is the default.
+
+    always-lock
+        Encrypt protected plaintext automatically.
+
+    abort
+        Refuse the commit.
+
+The hook encrypts exactly what is staged, so partial staging continues
+to work.
+
+The working-tree file is also locked unless it has unstaged changes.
+
+
+Safety checks
+~~~~~~~~~~~~~
+
+The pre-commit hook refuses to commit:
+
+* `.gitage.key`;
+* unprotected files containing `AGE-SECRET-KEY-`;
+* protected files still using recipients from an earlier rule set,
+  including changes committed earlier;
+* removal of a `.gitage` file that would unprotect files; or
+* a commit that becomes empty after encryption.
+
+These checks can be overridden with the corresponding
+`GIT_AGE_ALLOW_*` environment variables when necessary.
+
+`git commit --no-verify` skips the pre-commit hook.
+
+
+Pre-push
+~~~~~~~~
+
+The pre-push hook checks commits that are about to be pushed.
+
+It rejects history containing:
+
+* protected plaintext; or
+* private age keys.
+
+This catches plaintext introduced by operations that may not run the
+pre-commit hook, including:
+
+* `git commit --no-verify`;
+* rebases;
+* cherry-picks; and
+* merges.
+
+Fix the history before pushing, for example with:
+
+    $ git commit --amend
+    $ git rebase -i
+    $ git-age history rekey
+
+To bypass the check explicitly:
+
+    $ GIT_AGE_ALLOW_PLAINTEXT_PUSH=1 git push
+
+or:
+
+    $ git push --no-verify
+
+
+Other hooks
+~~~~~~~~~~~
+
+With `--unlock-after-commit`, the post-commit hook unlocks protected
+files again.
+
+post-checkout, post-merge and post-rewrite keep Git attributes in sync
+with `.gitage`.
+
+post-merge also warns when a merge changes `[recipients]`.
+
+Hooks run `git age`, so `git-age` must remain available on `PATH`.
+
+`install` never overwrites hooks it does not own.
+
+
+UNINSTALLING
+------------
+
+Run:
+
+    $ git-age uninstall
+
+This removes the hooks, Git attributes and repository configuration
+installed by `git-age`, and the ciphertext recipient cache.
+
+Use `git-age -n uninstall` to preview the removals. Hooks belonging to
+other tools and attributes outside the generated block are kept.
+The "Kept user Git config" message lists only settings in the local
+repository config. Global and system settings remain untouched.
+
+It does not remove:
+
+* identities;
+* configured recipients;
+* trusted-recipient hashes;
+* `.gitage`;
+* private keys; or
+* protected files.
+
+Existing files remain in their current locked or unlocked state.
+
+
+GIT INTEGRATION
+---------------
+
+`git-age install` configures three Git integrations:
+
+* readable diffs;
+* clean status and staging; and
+* decrypted merges.
+
+Nothing is committed to the repository. The settings live in repository
+configuration and `.git/info/attributes`.
+
+Successful `lock`, `unlock`, `rekey` and `edit` commands refresh the
+generated attributes to match the current rules and enabled drivers.
+Dry runs leave attributes unchanged. If a generated block is missing its
+`# END git-age` marker, insert that marker after the generated patterns
+and before any user attributes, then retry the command.
+
+Disabling one integration while keeping others enabled also disables
+its Git attributes. Globally configured age drivers stay inactive for
+those protected files. The repository's textconv cache stays disabled.
+
+
+Readable diffs
+~~~~~~~~~~~~~~
+
+Commands such as:
+
+    git diff
+    git log -p
+    git show
+
+display protected files decrypted when possible.
+
+Files that cannot be decrypted are shown as placeholders with a hash.
+
+Disable this integration with:
+
+    git-age install --no-diff
+
+Do not enable `diff.age.cachetextconv`. Git could then cache plaintext
+inside the repository.
+
+
+Clean status
+~~~~~~~~~~~~
+
+An unlocked protected file that has not changed does not appear modified
+in:
+
+    git status
+
+Running:
+
+    git add FILE
+
+also keeps the existing ciphertext when the plaintext has not changed.
+
+Once the plaintext changes, Git treats the file as modified normally.
+
+Disable this integration with:
+
+    git-age install --no-filter
+
+
+Decrypted merges
+~~~~~~~~~~~~~~~~
+
+When both sides of a merge, rebase or cherry-pick change a protected
+file, git-age lets Git merge the decrypted contents.
+
+The merged result is encrypted again for the current recipients.
+
+Plaintext history uses a normal text merge. Binary content or a failure
+to decrypt or encrypt keeps our version and reports a conflict.
+
+A conflict leaves the working-tree file unlocked with normal conflict
+markers.
+
+Resolve it and run:
+
+    $ git add FILE
+
+The clean filter encrypts the resolved file before staging it.
+
+If encryption fails, Git refuses to stage plaintext.
+
+Disable this integration with:
+
+    git-age install --no-merge
+
+
+CIPHERTEXT REUSE
+----------------
+
+age encryption is randomized. Encrypting identical plaintext twice
+normally produces different ciphertext.
+
+git-age avoids unnecessary Git changes by reusing existing ciphertext
+when it decrypts to the same contents.
+
+This requires access to an appropriate identity.
+
+Reuse also works with `-r`, GIT_AGE_RECIPIENT and age.recipient.
+git-age records a recipient fingerprint for ciphertext it creates under
+`.git/git-age/recipients`. These local records contain hashes, not keys
+or plaintext, and let Git's clean filter verify the current recipients.
+Without a record, externally configured recipients require fresh
+encryption once before their ciphertext can be reused.
+
+Encryption prunes cache entries older than 30 days when their ciphertext
+is absent from protected paths in the index, HEAD and working tree.
+The index and HEAD use their own `.gitage` rules. During conflicts, all
+index stages of paths protected by any rule version are retained.
+Retained live records get a fresh timestamp to avoid repeated scans.
+The 30-day grace period keeps recent ciphertext on other branches or
+in the stash through branch switches. `uninstall` removes the cache
+directory.
+
+Ciphertext is not reused after the recipient list changes.
+
+Comments, file-pattern edits, recipient reordering and duplicate entries
+do not prevent reuse. Nested lists are compared as part of the effective
+recipient set for each file.
+
+If recipients were changed through:
+
+    -r
+    GIT_AGE_RECIPIENT
+    age.recipient
+
+run:
+
+    $ git-age rekey
+
+or:
+
+    $ git-age lock --no-reuse
+
+
+GIT STASH
+---------
+
+`git stash` can store changes to unlocked protected files as plaintext
+inside the stash commit.
+
+The stash remains local and is not examined by the pre-push hook.
+
+`git-age history audit` does inspect it, and:
+
+    $ git-age history rekey
+
+rewrites `refs/stash`.
+
+If plaintext inside `.git` is a concern, lock protected files before
+using `git stash`.
+
+
+TEAMWORK
+--------
+
+Commit public recipients to `.gitage`.
+
+Each team member keeps their own private identity outside the repository.
+
+
+Adding a member
+~~~~~~~~~~~~~~~
+
+The new member creates a key:
+
+    $ age-keygen -o ~/.config/git-age/key.txt
+    $ age-keygen -y ~/.config/git-age/key.txt
+
+Add the printed public recipient to `[recipients]`, then configure the
+private identity locally:
+
+    $ git config age.keyFile ~/.config/git-age/key.txt
+
+Someone who already has access reviews the recipient change and
+re-encrypts the protected files:
+
+    $ git-age trust
+    $ git-age rekey
+    $ git commit -am "chore: add recipient"
+
+
+Removing a member
+~~~~~~~~~~~~~~~~~
+
+Remove their recipient from `.gitage`, then:
+
+    $ git-age trust
+    $ git-age rekey
+
+Removing a recipient does not prevent that person from decrypting old
+history.
+
+Rotate any secrets they previously had access to.
+
+
+Limited access
+~~~~~~~~~~~~~~
+
+Nested `[recipients]` can grant access to only part of a repository.
+
+For example, recipients listed only in:
+
+    prod/.gitage
+
+can receive access to files below `prod/` without receiving access to
+everything else.
+
+`unlock` and `rekey` skip protected files the current user cannot
+decrypt.
+
+`status` marks them as:
+
+    (no access)
+
+
+PULL REQUESTS
+-------------
+
+GitHub and GitLab do not run git-age or have access to your private
+identity.
+
+If both sides of a pull request modify the same protected file, the
+server will normally report a conflict even when git-age could merge the
+decrypted contents locally.
+
+Resolve it locally:
+
+    $ git fetch origin
+    $ git merge origin/main
+    $ git push
+
+A rebase can be used instead.
+
+The person resolving the conflict needs access to the affected protected
+files.
+
+Web interfaces generally display encrypted files as binary. Review their
+contents locally instead:
+
+    $ git diff origin/main...BRANCH
+
+`.gitage` itself remains normal readable text.
+
+After merging a recipient change, run:
+
+    $ git-age rekey
+
+before pushing.
+
+
+RECIPIENT TRUST
+---------------
+
+Anyone who can modify `.gitage` could add their own recipient and try to
+make future encryption include it.
+
+`git-age trust` protects against this.
+
+Review the current recipients and run:
+
+    $ git-age trust --show
+    $ git-age trust
+
+git-age stores a hash of the approved recipient lists.
+
+After that, `lock`, `rekey` and the pre-commit hook refuse to encrypt
+when the recipient lists have changed.
+
+Review the change and trust it again:
+
+    $ git-age trust
+
+This also applies after making an intentional recipient change yourself.
+
+Recipients configured locally through:
+
+    -r
+    GIT_AGE_RECIPIENT
+    age.recipient
+
+are considered yours and are not checked by recipient trust.
+
+
+AUDITING HISTORY
+----------------
+
+Run:
+
+    $ git-age history audit
+
+to search Git history for:
+
+* protected files committed as plaintext; and
+* committed private age keys.
+
+A path counts as protected when either:
+
+* the current `.gitage` protects it; or
+* the `.gitage` in that historical commit protected it.
+
+This means a secret committed before its protection rule was added can
+still be detected.
+
+The audit checks every file version once.
+
+Exit status:
+
+    0    nothing found
+    1    plaintext secrets or private keys found
+
+Use `--reflog` to also inspect commits reachable only from reflogs.
+
+
+LEAKED SECRETS
+--------------
+
+If `git-age history audit` finds plaintext, assume anyone with a copy
+of the repository may have seen it.
+
+Rotate the affected secret.
+
+You can then rewrite local history:
+
+    $ git-age history rekey -n
+    $ git-age history rekey
+
+The first command shows what would change.
+
+
+HISTORY REKEY
+-------------
+
+`git-age history rekey` rewrites local branches, tags and the stash so
+protected files use the current recipients.
+
+By default it re-encrypts both plaintext and existing ciphertext.
+
+The operation requires identities capable of decrypting the protected
+history. Use `--identity` to supply identity files and `--recipient`
+to override the configured recipients. Both options may be repeated.
+
+Use `--plaintext-only` to encrypt plaintext while keeping existing
+ciphertext. This mode does not require an identity.
+
+By default, an undecryptable protected version aborts the rewrite.
+Use `--keep-undecryptable` to leave such versions unchanged instead.
+
+The command previews the rewrite and asks for confirmation. Use
+`--yes` to run without asking; scripts without a terminal must pass it.
+Use `--dry-run` to preview without writing objects or moving refs.
+
+It refuses to run when:
+
+* the working tree is dirty;
+* a merge or rebase is in progress;
+* the repository is shallow; or
+* other worktrees exist.
+
+Changed commit and tag signatures are removed.
+
+Remote-tracking refs and notes are not rewritten.
+
+Original refs are kept under:
+
+    refs/git-age/original
+
+until you remove them.
+
+After checking the result:
+
+    $ git-age history audit -- --branches --tags
+
+force-push rewritten branches and tags if the rewritten history must
+replace remote history.
+
+Other users must then re-clone.
+
+Rewriting history cannot remove copies that already exist in clones,
+forks, backups or server caches. Always rotate exposed secrets.
+
+
+HISTORY PURGE
+-------------
+
+Remove selected files or directories throughout local history:
+
+    $ git-age history purge --dry-run secret.env old-secrets/
+    $ git-age history purge secret.env old-secrets/
+
+Paths are literal, relative to the current directory or `-C` directory.
+Deleted paths can be selected. Directories include all their historical
+contents. Paths need not be protected by `.gitage`. Use `--` before a
+path whose name starts with a dash. Renames are not followed; select
+every historical name you want removed.
+
+To remove every version of all protected files:
+
+    $ git-age history purge --all --dry-run
+    $ git-age history purge --all
+
+A path is selected if the current `.gitage` protects it, or if it was
+protected in any historical commit. Once selected, all versions of
+that path are removed, including plaintext and ciphertext versions.
+`.gitage` and `.gitage.key` are excluded from `--all`. Other private key
+files are selected only if protected by rules; pass their paths explicitly
+if you want to remove them.
+
+Purge requires no recipients or decryption identities. It also removes
+selected files from the index and working tree when updating HEAD.
+Commits and merge structure are kept, even if their trees become empty.
+Changed commit and tag signatures are removed.
+
+The command previews the selected paths and asks for confirmation.
+Use `--yes` in scripts. `--dry-run` writes no objects and moves no refs.
+The same repository checks and ref scope as history rekey apply,
+including detached HEAD. Remote-tracking refs and notes are kept.
+
+Original refs remain under `refs/git-age/original`. Check the result
+before deleting the backups. To remove the old history locally:
+
+    $ git for-each-ref --format='delete %(refname)' refs/git-age/original | git update-ref --stdin
+    $ git reflog expire --expire=now --all
+    $ git gc --prune=now
+
+Other refs, including remote-tracking refs, can still retain old history.
+Force-push the rewritten branches and tags if you want to replace remote
+history, and have other users re-clone. Rotate exposed secrets; existing
+clones, forks and server caches may still hold them.
+
+
+COMMITTED PRIVATE KEYS
+----------------------
+
+A committed private key is compromised.
+
+Generate a replacement, update its recipient in `.gitage`, and run:
+
+    $ git-age rekey
+    $ git-age history rekey
+
+History rekey warns about committed private keys but does not remove
+their files from history.
+
+Remove each key file with `git-age history purge PATH ...`.
+`--all` selects protected files and excludes `.gitage.key`.
+
+
+PORCELAIN STATUS
+----------------
+
+For scripts:
+
+    $ git-age status --porcelain
+
+prints:
+
+    XY PATH
+
+where:
+
+    X
+        L   locked
+        U   unlocked
+        ?   unknown
+
+    Y
+        S   encrypted to an old recipient list
+        N   not encrypted to you
+        .   otherwise
+
+`PATH` is relative to `-C` and quoted like a Git path when necessary.
+
+`-z` implies `--porcelain`, separates records with NUL bytes and does
+not quote paths.
+
+Porcelain status always exits successfully.
+
+
+SHELL COMPLETION
+----------------
+
+Generate completion with:
+
+    git-age completion SHELL
+
+Supported shells are:
+
+    bash
+    zsh
+    fish
+
+The scripts complete commands, options, mode values, and help topics.
+Path arguments for `lock`, `unlock`, `rekey`, `edit`, `status`, and `check`
+suggest protected files and directories containing them, relative to `-C`.
+Identity flags still complete ordinary files.
+The scripts also support `git age` when Git's shell completion is loaded.
+In zsh, load this script after tools such as Carapace. Other Git commands
+keep their existing completion provider.
+With Carapace, explicitly source the script below; installing it in
+`fpath` alone does not activate the Git bridge.
+
+
+zsh
+~~~
+
+Install the completion:
+
+    $ mkdir -p ~/.local/share/zsh/site-functions
+    $ git-age completion zsh > ~/.local/share/zsh/site-functions/_git-age
+
+Add that directory to `fpath` before `compinit`:
+
+    fpath=(~/.local/share/zsh/site-functions $fpath)
+
+Or load it directly after `compinit`:
+
+    source <(git-age completion zsh)
+
+
+bash
+~~~~
+
+Install it where bash-completion can find it:
+
+    $ mkdir -p ~/.local/share/bash-completion/completions
+    $ git-age completion bash > ~/.local/share/bash-completion/completions/git-age
+
+Or add this to `.bashrc`:
+
+    source <(git-age completion bash)
+
+
+fish
+~~~~
+
+Install it with:
+
+    $ git-age completion fish > ~/.config/fish/completions/git-age.fish
+
+Regenerate shell completion after upgrading git-age.
+
+
+DEPENDENCIES
+------------
+
+git-age is a single executable with age built in. Git is its only
+runtime dependency.
+
+Building from source requires Go 1.25+.
+
+Outside a Git repository, `lock`, `unlock` and `status` still work, but
+existing Git ciphertext cannot be reused.
