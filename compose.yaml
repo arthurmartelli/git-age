@@ -1,0 +1,39 @@
+# Linux environment for running the tests and the CLI against this checkout.
+#
+#   docker compose run --rm dev                    # go vet and go test
+#   docker compose run --rm dev go test ./internal/cli
+#   docker compose run --rm dev git-age status     # git-age is rebuilt on every run
+#
+# Runs as $UID:$GID, or 1000:1000 since shells rarely export them;
+# set them in .env if yours differ.
+services:
+  dev:
+    build:
+      dockerfile_inline: |
+        FROM golang:1.25
+        RUN apt-get update -qq \
+         && apt-get install -y -qq --no-install-recommends age zsh fish acl attr \
+         && rm -rf /var/lib/apt/lists/* \
+         && git config --system safe.directory '*' \
+         && mkdir -p /go/pkg/mod /cache/go-build \
+         && chmod -R 1777 /go /cache
+    user: "${UID:-1000}:${GID:-1000}"
+    working_dir: /src
+    volumes:
+      - .:/src:z
+      - go-cache:/cache/go-build
+      - go-mod:/go/pkg/mod
+    environment:
+      HOME: /tmp
+      GOCACHE: /cache/go-build
+      CGO_ENABLED: "0"
+      # Git refuses VCS stamping if the checkout owner differs from the user.
+      GOFLAGS: -buildvcs=false
+      # The static executable test checks the binary built by the entrypoint.
+      GIT_AGE: /go/bin/git-age
+    entrypoint: ["sh", "-c", "go build -trimpath -o /go/bin/git-age ./cmd/git-age && exec \"$$@\"", "--"]
+    command: ["sh", "-c", "go vet ./... && go test ./..."]
+
+volumes:
+  go-cache:
+  go-mod:
