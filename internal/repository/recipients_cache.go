@@ -29,6 +29,11 @@ func (k keys) recipientFingerprint(target fileTarget) string {
 	return recipientSetFingerprint(values)
 }
 
+func (k keys) matchesRecipientRecord(target fileTarget, recorded []byte) bool {
+	exact, fallback, _ := strings.Cut(string(recorded), "\n")
+	return exact == k.recipientFingerprint(target) || k.toIdentities && fallback != "" && fallback == recipientSetFingerprint(target.listed)
+}
+
 func recipientSetFingerprint(values []string) string {
 	values = slices.Clone(values)
 	for i, value := range values {

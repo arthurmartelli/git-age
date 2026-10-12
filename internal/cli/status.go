@@ -75,6 +75,7 @@ func newStatusCommand(options *globalOptions) *cobra.Command {
 				for _, path := range stale {
 					fmt.Fprintf(&warning, "  %s\n", quoteStatusPath(path))
 				}
+				fmt.Fprintf(&warning, "\n%s\n", staleRecipientAdvice(stale))
 			}
 			untrusted, err := repository.RecipientsUntrusted(options.directory)
 			if err != nil {

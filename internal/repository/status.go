@@ -28,6 +28,7 @@ func Statuses(directory string, files []ProtectedFile) ([]FileStatus, string, er
 		return nil, "", err
 	}
 	history := newRecipientHistory(root, inGit)
+	history.keys = &keys
 	statuses := make([]FileStatus, len(files))
 	for i, file := range files {
 		path := nativePath(directory, file.Path)
@@ -55,16 +56,46 @@ type recipientHistory struct {
 	root      string
 	inGit     bool
 	baselines map[string]string
+	rules     map[string][]byte
+	keys      *keys
+	cache     string
 }
 
 func newRecipientHistory(root string, inGit bool) *recipientHistory {
-	return &recipientHistory{root: root, inGit: inGit, baselines: map[string]string{}}
+	history := &recipientHistory{root: root, inGit: inGit, baselines: map[string]string{}}
+	if inGit {
+		history.cache, _ = gitPath(root, "git-age/recipients")
+	}
+	return history
 }
 
 // stale reports whether the locked file at path needs `git-age rekey`.
 func (h *recipientHistory) stale(path string) bool {
 	if !h.inGit {
 		return false
+	}
+	content, err := os.ReadFile(path)
+	return err == nil && h.staleContent(path, content)
+}
+
+// staleContent can inspect the index without reading the working copy.
+func (h *recipientHistory) staleContent(path string, content []byte) bool {
+	if !h.inGit || contentState(content) != Locked {
+		return false
+	}
+	if h.keys == nil {
+		identities, _ := loadIdentities(h.root, h.root, nil)
+		resolved, err := resolveKeys(h.root, h.root, nil, identities, h.rules)
+		if err == nil {
+			h.keys = &resolved
+		}
+	}
+	if h.cache != "" && h.keys != nil {
+		if record, err := os.ReadFile(filepath.Join(h.cache, ciphertextHash(content))); err == nil {
+			if target, err := h.keys.describeTarget(h.root, path, h.rules); err == nil && h.keys.matchesRecipientRecord(target, record) {
+				return false
+			}
+		}
 	}
 	directory := filepath.Dir(path)
 	revision, ok := h.baselines[directory]
@@ -80,8 +111,7 @@ func (h *recipientHistory) stale(path string) bool {
 	if err != nil {
 		return false
 	}
-	current, err := os.ReadFile(path)
-	return err == nil && bytes.Equal(previous, current)
+	return bytes.Equal(previous, content)
 }
 
 // baseline returns the newest revision whose [recipients] for files in
@@ -95,7 +125,7 @@ func (h *recipientHistory) baseline(directory string) string {
 		rule := filepath.Join(parent, ".gitage")
 		relative, _ := filepath.Rel(h.root, rule)
 		rulePaths = append(rulePaths, filepath.ToSlash(relative))
-		if recipients, err := ruleRecipients(rule, nil); err == nil {
+		if recipients, err := ruleRecipients(rule, h.rules); err == nil {
 			current = append(current, recipients...)
 		}
 	}
@@ -117,6 +147,29 @@ func (h *recipientHistory) baseline(directory string) string {
 		}
 	}
 	return ""
+}
+
+// StaleFiles reports the current state after lock, including locked files it
+// deliberately skips. Explicit recipients and identity flags apply here too.
+func StaleFiles(directory string, files []ProtectedFile, recipients, identityPaths []string) ([]string, error) {
+	directory, root, inGit, err := resolveDirectory(directory)
+	if err != nil || !inGit {
+		return nil, err
+	}
+	identities, _ := loadIdentities(directory, root, identityPaths)
+	resolved, err := resolveKeys(directory, root, recipients, identities, nil)
+	if err != nil {
+		return nil, err
+	}
+	history := newRecipientHistory(root, true)
+	history.keys = &resolved
+	var stale []string
+	for _, file := range files {
+		if history.stale(nativePath(directory, file.Path)) {
+			stale = append(stale, file.Path)
+		}
+	}
+	return stale, nil
 }
 
 // recipientsAt combines the [recipients] of the rule files at revision,

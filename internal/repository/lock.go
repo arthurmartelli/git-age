@@ -433,7 +433,6 @@ func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext
 	if err != nil {
 		return nil
 	}
-	fingerprint := k.recipientFingerprint(target)
 	relative, _ := filepath.Rel(root, path)
 	var stale [][]byte
 	var checkedLegacy, legacy bool
@@ -444,8 +443,7 @@ func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext
 		}
 		recorded, err := os.ReadFile(filepath.Join(cache, ciphertextHash(ciphertext)))
 		if err == nil {
-			exact, fallback, _ := strings.Cut(string(recorded), "\n")
-			if exact != fingerprint && (!k.toIdentities || fallback == "" || fallback != recipientSetFingerprint(target.listed)) {
+			if !k.matchesRecipientRecord(target, recorded) {
 				continue
 			}
 		} else {

@@ -105,11 +105,29 @@ func newLockCommand(options *globalOptions) *cobra.Command {
 					return err
 				}
 			}
-			return reportFiles(cmd, options, files, repository.Locked, "lock", nil)
+			if err := reportFiles(cmd, options, files, repository.Locked, "lock", nil); err != nil || options.dryRun {
+				return err
+			}
+			stale, err := repository.StaleFiles(options.directory, files, recipients, identities)
+			if err != nil || len(stale) == 0 {
+				return err
+			}
+			return warnStaleRecipients(cmd, stale)
 		},
 	}
 	recipientFlags(lock.Flags(), &recipients)
 	identityFlags(lock.Flags(), &identities)
 	lock.Flags().BoolVar(&noReuse, "no-reuse", false, "always encrypt freshly instead of reusing unchanged ciphertext")
 	return lock
+}
+
+func warnStaleRecipients(cmd *cobra.Command, paths []string) error {
+	var warning strings.Builder
+	warning.WriteString("git-age: warning: these files are still encrypted to a previous [recipients] list:\n")
+	for _, path := range paths {
+		fmt.Fprintf(&warning, "  %s\n", quoteStatusPath(path))
+	}
+	fmt.Fprintf(&warning, "\n%s\n", staleRecipientAdvice(paths))
+	_, err := fmt.Fprint(cmd.ErrOrStderr(), warning.String())
+	return err
 }

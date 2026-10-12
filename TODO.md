@@ -4,12 +4,12 @@ Pending work on the Go port before merging `go-port` into `main`.
 
 ## Correctness
 
-- [ ] `check --staged` doesn't report stale recipients; only the pre-commit hook
+- [x] `check --staged` doesn't report stale recipients; only the pre-commit hook
   computes them (`repository/check.go:166`).
-- [ ] Stale-recipient detection only compares against HEAD (`commit.go:108-158`),
+- [x] Stale-recipient detection only compares against HEAD (`commit.go:108-158`),
   so files left stale by earlier commits aren't flagged. Add rekey/`git add`
   advice to the warning.
-- [ ] `lock` doesn't warn about stale recipients afterwards (`cli/lock.go:89-108`).
+- [x] `lock` doesn't warn about stale recipients afterwards (`cli/lock.go:89-108`).
 - [ ] `unlock`, `rekey` and `edit` don't refresh the `.git/info/attributes` block;
   only `lock` and the hooks do.
 - [x] Reject invalid `GIT_AGE_ALLOW_*` values (e.g. `maybe`) instead of silently
@@ -25,9 +25,12 @@ Pending work on the Go port before merging `go-port` into `main`.
   error.
 - [ ] The ciphertext fingerprint cache in `.git/git-age/recipients`
   (`repository/recipients_cache.go`) gains one file per encryption and is never
-  pruned. `uninstall` doesn't remove it either. Prune entries whose blobs are no
-  longer reachable from the index, HEAD or conflict stages, and remove the
-  directory on uninstall.
+  pruned. `uninstall` doesn't remove it either. When pruning, keep entries for
+  ciphertext in the index (all stages), HEAD, and locked protected files in the
+  working tree, since `lock` records the fingerprint before the file is staged.
+  Also keep entries newer than a grace period (e.g. 30 days), so ciphertext on
+  other branches or in the stash survives a branch switch. Remove the directory
+  on uninstall.
 - [ ] Tolerate a BEGIN marker without END in `.git/info/attributes`
   (`attributes.go:324`), or give a clear repair message.
 

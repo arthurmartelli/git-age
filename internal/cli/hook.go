@@ -163,7 +163,7 @@ func preCommit(cmd *cobra.Command, options *globalOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := refuseUnless(cmd, "GIT_AGE_ALLOW_STALE_RECIPIENTS", check.StaleFiles, "files are still encrypted to the previous list of [recipients]", "Run `git-age rekey` and stage the encrypted files before committing the recipient changes."); err != nil {
+	if err := refuseUnless(cmd, "GIT_AGE_ALLOW_STALE_RECIPIENTS", check.StaleFiles, "files are still encrypted to the previous list of [recipients]", staleRecipientAdvice(check.StaleFiles)); err != nil {
 		return err
 	}
 	var plaintext []string

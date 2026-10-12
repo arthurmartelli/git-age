@@ -85,53 +85,23 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 }
 
 func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]byte) ([]string, error) {
-	var changed []string
-	for path, content := range rules {
-		_, current, err := parseRules(path, content)
-		if err != nil {
-			return nil, err
-		}
-		relative, _ := filepath.Rel(root, path)
-		previous, gitErr := git(root, "show", "HEAD:"+filepath.ToSlash(relative))
-		var old []string
-		if gitErr == nil {
-			_, old, err = parseRules(path, previous)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if !sameRecipients(current, old) {
-			changed = append(changed, filepath.Dir(path))
-		}
-	}
-	if len(changed) == 0 {
-		return nil, nil
-	}
 	var candidates []string
 	for path := range blobs {
-		for _, parent := range changed {
-			absolute := nativePath(root, path)
-			if inside(parent, absolute) {
-				candidates = append(candidates, absolute)
-				break
-			}
-		}
+		candidates = append(candidates, nativePath(root, path))
 	}
 	files, err := matchProtectedFiles(root, root, candidates, rules, ruleIgnoreCase(root, true))
 	if err != nil {
 		return nil, err
 	}
 	var stale []string
+	history := newRecipientHistory(root, true)
+	history.rules = rules
 	for _, file := range files {
-		previous, err := git(root, "rev-parse", "--verify", "HEAD:"+file.Path)
-		if err != nil || strings.TrimSpace(string(previous)) != blobs[file.Path] {
-			continue
-		}
 		content, err := git(root, "cat-file", "blob", blobs[file.Path])
 		if err != nil {
 			return nil, err
 		}
-		if contentState(content) == Locked {
+		if history.staleContent(nativePath(root, file.Path), content) {
 			stale = append(stale, file.Path)
 		}
 	}

@@ -73,6 +73,9 @@ COMMANDS
     lock [PATH...]
         Encrypt protected files.
 
+        Warn if locked files still use earlier recipients. Run `rekey`
+        and `git add` for the files named in the warning.
+
     unlock [PATH...]
         Decrypt protected files.
 
@@ -109,6 +112,8 @@ COMMANDS
 
         `--staged` checks the index contents using the staged `.gitage`
         rules, including selected files unchanged since the last commit.
+        It also rejects stale recipients, including recipient changes
+        committed earlier. Rekey affected files and stage the result.
         Private-key and removed-rule checks still cover all staged changes.
 
     install
@@ -467,7 +472,8 @@ The pre-commit hook refuses to commit:
 
 * `.gitage.key`;
 * unprotected files containing `AGE-SECRET-KEY-`;
-* a changed recipient list while files still use the old recipients;
+* protected files still using recipients from an earlier rule set,
+  including changes committed earlier;
 * removal of a `.gitage` file that would unprotect files; or
 * a commit that becomes empty after encryption.
 

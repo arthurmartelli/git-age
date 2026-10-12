@@ -36,6 +36,9 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 					return err
 				}
 				files = result.Files
+				if err := refuseUnless(cmd, "GIT_AGE_ALLOW_STALE_RECIPIENTS", result.StaleFiles, "files are still encrypted to the previous list of [recipients]", staleRecipientAdvice(result.StaleFiles)); err != nil {
+					return err
+				}
 			} else {
 				files, err = repository.ProtectedFiles(options.directory, args)
 				if err != nil {
@@ -74,6 +77,10 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 	}
 	check.Flags().BoolVar(&staged, "staged", false, "check the index contents using the staged .gitage rules")
 	return check
+}
+
+func staleRecipientAdvice(paths []string) string {
+	return "Re-encrypt these files and stage the result:\n\n  git-age rekey -- " + shellPaths(paths) + "\n  git add -- " + shellPaths(paths)
 }
 
 func reportCheckFailure(cmd *cobra.Command, message string, paths []string, advice string) error {

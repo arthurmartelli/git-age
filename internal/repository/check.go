@@ -30,15 +30,29 @@ func CheckIndex(directory string, paths []string) (IndexCheck, error) {
 	if err != nil {
 		return result, err
 	}
+	stalePaths := map[string]bool{}
+	for _, path := range result.StaleFiles {
+		stalePaths[path] = true
+	}
+	result.StaleFiles = nil
 	for i := range result.Files {
 		file := &result.Files[i]
+		previous := file.Path
 		path, err := filepath.Rel(directory, nativePath(result.root, file.Path))
 		if err != nil {
 			return result, err
 		}
 		file.Path = filepath.ToSlash(path)
+		if stalePaths[previous] {
+			result.StaleFiles = append(result.StaleFiles, file.Path)
+		}
 	}
 	result.Files, err = selectFiles(directory, result.Files, paths)
+	selected := map[string]bool{}
+	for _, file := range result.Files {
+		selected[file.Path] = true
+	}
+	result.StaleFiles = slices.DeleteFunc(result.StaleFiles, func(path string) bool { return !selected[path] })
 	return result, err
 }
 
@@ -163,8 +177,6 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		}
 	}
 	slices.Sort(result.PrivateKeys)
-	if !requireRules {
-		result.StaleFiles, err = stagedStaleFiles(root, blobs, rules)
-	}
+	result.StaleFiles, err = stagedStaleFiles(root, blobs, rules)
 	return result, err
 }
