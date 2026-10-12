@@ -257,7 +257,7 @@ func (r *rewriter) encrypt(target fileTarget, plaintext []byte) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if err := r.keys.rememberCiphertext(r.root, target, ciphertext); err != nil {
+	if err := r.keys.rememberCiphertext(r.root, target, ciphertext, false); err != nil {
 		return "", err
 	}
 	return r.write("blob", ciphertext)

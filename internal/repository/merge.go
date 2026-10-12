@@ -77,6 +77,7 @@ func Merge(directory, path, base, ours, theirs string, markerSize int) (bool, er
 		if err != nil {
 			return false, err
 		}
+		defer keys.cache.objects.close()
 		target, err := keys.target(root, path, nil)
 		if err != nil {
 			return false, err

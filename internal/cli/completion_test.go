@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -91,16 +90,7 @@ func TestProtectedPathCompletionWithoutRules(t *testing.T) {
 
 func TestCompletionScripts(t *testing.T) {
 	directory := t.TempDir()
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", filepath.Join(directory, name), "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	executable := buildGitAge(t)
 	key := filepath.Join(directory, "identity key")
 	if err := os.WriteFile(key, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
@@ -181,7 +171,7 @@ if [[ $words[1] != age ]]; then
 fi
 _describe() { print -rl -- "${completions[@]}"; }
 _git-age`
-				for _, command := range []string{"age", filepath.ToSlash(filepath.Join(directory, name))} {
+				for _, command := range []string{"age", filepath.ToSlash(executable)} {
 					output, err := exec.Command(shell, "-f", "-c", program, "zsh", path, command, "lo").CombinedOutput()
 					if err != nil || !strings.Contains(string(output), "lock:") {
 						t.Errorf("%s suggestions: %v\n%s", command, err, output)

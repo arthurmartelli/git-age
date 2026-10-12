@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -258,16 +257,7 @@ func TestMergeArgumentsAndDryRun(t *testing.T) {
 }
 
 func TestMergeGitDriver(t *testing.T) {
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	executable := filepath.Join(t.TempDir(), name)
-	build := exec.Command("go", "build", "-o", executable, "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	executable := buildGitAge(t)
 	for _, scenario := range []string{"clean", "identical", "conflict", "rebase", "cherry-pick", "no identity"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("GIT_AGE_KEY_FILE", "")

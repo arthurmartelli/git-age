@@ -42,6 +42,7 @@ func Unlock(directory string, files []ProtectedFile, identityPaths []string, dry
 	}
 	var userKeys *keys
 	history := newRecipientHistory(root, inGit)
+	defer history.objects.close()
 
 	// Authenticate all ciphertexts first so a bad file cannot leave a partial unlock.
 	var replacements []replacement

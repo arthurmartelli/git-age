@@ -9,7 +9,70 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 )
+
+func TestLegacyReuseRecordsRecipients(t *testing.T) {
+	for _, implicit := range []bool{false, true} {
+		name := "explicit recipients"
+		if implicit {
+			name = "implicit original owner"
+		}
+		t.Run(name, func(t *testing.T) {
+			isolateHookEnvironment(t)
+			plaintext := []byte("original\n")
+			directory, owner, _ := cleanFixture(t, plaintext, false)
+			teammate := newIdentity(t)
+			rules := "[files]\n*.env\n"
+			if implicit {
+				writeFile(t, directory, "sub/.gitage", "[recipients]\n"+teammate.Recipient().String()+"\n")
+			} else {
+				rules += "[recipients]\n" + owner.Recipient().String() + "\n" + teammate.Recipient().String() + "\n"
+			}
+			writeFile(t, directory, ".gitage", rules)
+			var ciphertext bytes.Buffer
+			writer, err := age.Encrypt(&ciphertext, owner.Recipient(), teammate.Recipient())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.Write(plaintext); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, directory, "sub/shared.env", ciphertext.String())
+			runGit(t, directory, "add", ".gitage", "sub")
+			runGit(t, directory, "commit", "-qm", "legacy team ciphertext")
+			writeFile(t, directory, ".gitage.key", teammate.String()+"\n")
+			mustCommand(t, directory, "unlock", "sub/shared.env")
+			before := installSnapshot(t, directory)
+			mustCommand(t, directory, "lock", "-n", "sub/shared.env")
+			assertSnapshotUnchanged(t, directory, before)
+			mustCommand(t, directory, "lock", "sub/shared.env")
+			if !bytes.Equal(ciphertext.Bytes(), readFile(t, directory, "sub/shared.env")) {
+				t.Fatal("legacy ciphertext was not reused")
+			}
+			path := recipientCachePath(t, directory, ciphertext.Bytes())
+			record, err := os.ReadFile(path)
+			if err != nil || len(record) == 0 || (record[0] == '\n') != implicit {
+				t.Fatalf("unexpected legacy recipient record: %q, %v", record, err)
+			}
+			mustCommand(t, directory, "unlock", "sub/shared.env")
+			mustCommand(t, directory, "lock", "sub/shared.env")
+			if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, record) {
+				t.Fatalf("reuse changed the original provenance: %q, %v", got, err)
+			}
+			// The original owner must not survive an explicit narrowing to the teammate.
+			mustCommand(t, directory, "unlock", "sub/shared.env")
+			mustCommand(t, directory, "lock", "-r", teammate.Recipient().String(), "sub/shared.env")
+			fresh := readFile(t, directory, "sub/shared.env")
+			assertDecrypts(t, fresh, teammate, plaintext)
+			assertCannotDecrypt(t, fresh, owner)
+		})
+	}
+}
 
 func recipientCachePath(t *testing.T, directory string, ciphertext []byte) string {
 	t.Helper()

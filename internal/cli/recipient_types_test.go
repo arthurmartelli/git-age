@@ -18,7 +18,11 @@ import (
 // The test executable doubles as an age plugin, exercising the real protocol.
 func TestMain(m *testing.M) {
 	if strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") != "age-plugin-gitagetest" {
-		os.Exit(m.Run())
+		code := m.Run()
+		if testGitAge.directory != "" {
+			os.RemoveAll(testGitAge.directory)
+		}
+		os.Exit(code)
 	}
 	p, err := plugin.New("gitagetest")
 	if err != nil {

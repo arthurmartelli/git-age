@@ -3,11 +3,9 @@ package cli
 import (
 	"bytes"
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -20,17 +18,7 @@ func TestPrePushGitHook(t *testing.T) {
 	t.Setenv("GIT_AGE_HOOK_MODE", "")
 	t.Setenv("GIT_AGE_UNLOCK_AFTER_COMMIT", "0")
 	t.Setenv("GIT_AGE_ALLOW_PLAINTEXT_PUSH", "")
-	bin := t.TempDir()
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", filepath.Join(bin, name), "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	buildGitAge(t)
 	directory, _, _ := cleanFixture(t, []byte("original\n"), false)
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, directory, "init", "--bare", "-q", remote)

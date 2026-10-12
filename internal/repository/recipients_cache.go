@@ -52,22 +52,27 @@ func recipientSetFingerprint(values []string) string {
 
 // rememberCiphertext lets later lock and clean operations verify that a blob
 // uses the current recipients, even when their source isn't tracked in Git.
-func (k keys) rememberCiphertext(root string, target fileTarget, ciphertext []byte) error {
-	directory, err := gitPath(root, "git-age/recipients")
+func (k keys) rememberCiphertext(root string, target fileTarget, ciphertext []byte, legacy bool) error {
+	directory, err := k.recipientCacheDirectory(root)
 	if err != nil {
 		return err
 	}
-	if !*k.cachePruned {
+	if !k.cache.pruned {
 		if err := pruneRecipientCache(root, directory, time.Now()); err != nil {
 			return fmt.Errorf("prune ciphertext recipients: %w", err)
 		}
-		*k.cachePruned = true
+		k.cache.pruned = true
 	}
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
 	record := k.recipientFingerprint(target)
 	if k.toIdentities {
+		if legacy {
+			// History proves the listed recipients, not the original implicit
+			// owner's identity. Do not certify an exact set we cannot know.
+			record = ""
+		}
 		// With identity fallback, the original encryptor is an implicit
 		// recipient. Another listed team member needn't replace that owner.
 		record += "\n" + recipientSetFingerprint(target.listed)

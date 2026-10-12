@@ -205,10 +205,12 @@ func TestInstallGitIntegration(t *testing.T) {
 		name += ".exe"
 	}
 	executable := filepath.Join(bin, name)
-	build := exec.Command("go", "build", "-o", executable, "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
+	content, err := os.ReadFile(buildGitAge(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, content, 0755); err != nil {
+		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	directory, identity, _ := cleanFixture(t, []byte("A=1\nB=1\nC=1\n"), false)
@@ -412,17 +414,7 @@ func TestInstallDriverFlags(t *testing.T) {
 }
 
 func TestInstallDisablesInheritedDrivers(t *testing.T) {
-	bin := t.TempDir()
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	build := exec.Command("go", "build", "-o", filepath.Join(bin, name), "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	buildGitAge(t)
 	for _, disabled := range []string{"diff", "filter", "merge"} {
 		t.Run(disabled, func(t *testing.T) {
 			t.Setenv("GIT_AGE_KEY_FILE", "")

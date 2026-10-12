@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -188,18 +187,7 @@ func TestPreCommitNoRules(t *testing.T) {
 }
 
 func TestHookGitCommit(t *testing.T) {
-	bin := t.TempDir()
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	executable := filepath.Join(bin, name)
-	build := exec.Command("go", "build", "-o", executable, "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	buildGitAge(t)
 	for _, scenario := range []string{"commit", "partial staging", "commit only", "post-commit unlock", "exported Git paths", "linked worktree", "lock unlock status"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("GIT_AGE_KEY_FILE", "")

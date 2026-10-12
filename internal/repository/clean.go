@@ -46,6 +46,7 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 	if err != nil {
 		return nil, err
 	}
+	defer keys.cache.objects.close()
 	target, err := keys.target(root, path, nil)
 	if err != nil {
 		return nil, err
@@ -56,7 +57,7 @@ func cleanProtectedContent(directory, root, path string, content []byte, conflic
 		}
 		return keys.encrypt(root, path, target, content, true, true)
 	}
-	if ciphertext := keys.reusableCiphertext(root, path, target, content); ciphertext != nil {
+	if ciphertext, _ := keys.reusableCiphertext(root, path, target, content); ciphertext != nil {
 		return ciphertext, nil
 	}
 	return content, nil

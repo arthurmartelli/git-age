@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -98,16 +97,7 @@ func TestTextconvGitDiff(t *testing.T) {
 	writeFile(t, directory, ".gitattributes", "secret.env diff=age\n")
 	writeFile(t, directory, "secret.env", string(encryptFixture(t, identity.Recipient(), "TOKEN=before\n", false)))
 
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	executable := filepath.Join(t.TempDir(), name)
-	build := exec.Command("go", "build", "-o", executable, "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	executable := buildGitAge(t)
 	git := func(args ...string) string {
 		t.Helper()
 		output, err := exec.Command("git", append([]string{"-C", directory}, args...)...).CombinedOutput()

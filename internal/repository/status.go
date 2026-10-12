@@ -28,6 +28,7 @@ func Statuses(directory string, files []ProtectedFile) ([]FileStatus, string, er
 		return nil, "", err
 	}
 	history := newRecipientHistory(root, inGit)
+	defer history.objects.close()
 	history.keys = &keys
 	statuses := make([]FileStatus, len(files))
 	for i, file := range files {
@@ -59,10 +60,11 @@ type recipientHistory struct {
 	rules     map[string][]byte
 	keys      *keys
 	cache     string
+	objects   *gitObjects
 }
 
 func newRecipientHistory(root string, inGit bool) *recipientHistory {
-	history := &recipientHistory{root: root, inGit: inGit, baselines: map[string]string{}}
+	history := &recipientHistory{root: root, inGit: inGit, baselines: map[string]string{}, objects: newGitObjects(root)}
 	if inGit {
 		history.cache, _ = gitPath(root, "git-age/recipients")
 	}
@@ -107,7 +109,7 @@ func (h *recipientHistory) staleContent(path string, content []byte) bool {
 		return false
 	}
 	relative, _ := filepath.Rel(h.root, path)
-	previous, err := git(h.root, "show", revision+":"+filepath.ToSlash(relative))
+	previous, err := h.objects.blob(revision, relative)
 	if err != nil {
 		return false
 	}
@@ -117,7 +119,7 @@ func (h *recipientHistory) staleContent(path string, content []byte) bool {
 // baseline returns the newest revision whose [recipients] for files in
 // directory differ from the working tree's, or "" when they never changed.
 func (h *recipientHistory) baseline(directory string) string {
-	if !hasCommit(h.root, "HEAD") {
+	if !h.objects.hasCommit("HEAD") {
 		return ""
 	}
 	var rulePaths, current []string
@@ -139,7 +141,7 @@ func (h *recipientHistory) baseline(directory string) string {
 	}
 	for _, commit := range strings.Fields(string(log)) {
 		parent := commit + "^"
-		if !hasCommit(h.root, parent) {
+		if !h.objects.hasCommit(parent) {
 			return ""
 		}
 		if !sameRecipients(h.recipientsAt(parent, rulePaths), current) {
@@ -162,6 +164,7 @@ func StaleFiles(directory string, files []ProtectedFile, recipients, identityPat
 		return nil, err
 	}
 	history := newRecipientHistory(root, true)
+	defer history.objects.close()
 	history.keys = &resolved
 	var stale []string
 	for _, file := range files {
@@ -177,8 +180,8 @@ func StaleFiles(directory string, files []ProtectedFile, recipients, identityPat
 func (h *recipientHistory) recipientsAt(revision string, rulePaths []string) []string {
 	var recipients []string
 	for _, path := range rulePaths {
-		content, err := git(h.root, "show", revision+":"+path)
-		if err != nil {
+		content := h.objects.rule(revision, path)
+		if content == nil {
 			continue
 		}
 		if _, listed, err := parseRules(path, content); err == nil {

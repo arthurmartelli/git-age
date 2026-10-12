@@ -2,35 +2,54 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"filippo.io/age"
 	"filippo.io/age/armor"
 )
 
-// buildGitAge puts the real executable on PATH so installed Git hooks and
-// drivers exercise the same entrypoint users run.
+var testGitAge struct {
+	sync.Once
+	path, directory string
+	err             error
+}
+
+// buildGitAge shares one executable for hooks and drivers across the suite.
 func buildGitAge(t *testing.T) string {
 	t.Helper()
-	bin := t.TempDir()
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
+	testGitAge.Do(func() {
+		if supplied := os.Getenv("GIT_AGE"); supplied != "" {
+			testGitAge.path, testGitAge.err = filepath.Abs(supplied)
+			return
+		}
+		testGitAge.directory, testGitAge.err = os.MkdirTemp("", "git-age-test-bin-")
+		if testGitAge.err != nil {
+			return
+		}
+		name := "git-age"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		testGitAge.path = filepath.Join(testGitAge.directory, name)
+		build := exec.Command("go", "build", "-o", testGitAge.path, "./cmd/git-age")
+		build.Dir = "../.."
+		if output, err := build.CombinedOutput(); err != nil {
+			testGitAge.err = fmt.Errorf("build: %w\n%s", err, output)
+		}
+	})
+	if testGitAge.err != nil {
+		t.Fatal(testGitAge.err)
 	}
-	path := filepath.Join(bin, name)
-	build := exec.Command("go", "build", "-o", path, "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	return path
+	t.Setenv("PATH", filepath.Dir(testGitAge.path)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return testGitAge.path
 }
 
 func mustCommand(t *testing.T, directory, command string, args ...string) string {

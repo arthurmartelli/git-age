@@ -56,6 +56,7 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 	if err != nil {
 		return nil, nil, err
 	}
+	defer keys.cache.objects.close()
 
 	var replacements []replacement
 	for _, file := range pending {
@@ -137,7 +138,30 @@ type keys struct {
 	root         string
 	rules        map[string][]byte
 	listed       *[]string // Every [recipients] entry in the repository, once read.
-	cachePruned  *bool     // Prune at most once per encryption operation.
+	cache        *encryptionCache
+}
+
+type recipientBaseline struct {
+	revision string
+	ok       bool
+}
+
+type encryptionCache struct {
+	objects       *gitObjects
+	directory     string
+	directoryErr  error
+	directoryRead bool
+	pruned        bool
+	matches       map[string]bool
+	baselines     map[string]recipientBaseline
+}
+
+func (k keys) recipientCacheDirectory(root string) (string, error) {
+	if !k.cache.directoryRead {
+		k.cache.directory, k.cache.directoryErr = gitPath(root, "git-age/recipients")
+		k.cache.directoryRead = true
+	}
+	return k.cache.directory, k.cache.directoryErr
 }
 
 var errNoKey = errors.New("no encryption key configured; use -r, [recipients], or an age identity")
@@ -158,7 +182,9 @@ func loadKeys(directory, root string, explicitRecipients, identityPaths []string
 
 // resolveKeys finds the base recipients; the first source that is set wins.
 func resolveKeys(directory, root string, explicitRecipients []string, identities identitySet, rules map[string][]byte) (keys, error) {
-	k := keys{identitySet: identities, root: root, rules: rules, listed: new([]string), cachePruned: new(bool)}
+	k := keys{identitySet: identities, root: root, rules: rules, listed: new([]string), cache: &encryptionCache{
+		objects: newGitObjects(root), matches: map[string]bool{}, baselines: map[string]recipientBaseline{},
+	}}
 	top := filepath.Join(root, ".gitage")
 	var err error
 	switch environment := os.Getenv("GIT_AGE_RECIPIENT"); {
@@ -332,16 +358,22 @@ func (k keys) listedRecipients() ([]string, error) {
 
 // encrypt reuses unchanged ciphertext from Git when reuse is allowed.
 func (k keys) encrypt(root, path string, target fileTarget, plaintext []byte, reuse, remember bool) ([]byte, error) {
+	var ciphertext []byte
+	var legacy bool
 	if reuse {
-		if ciphertext := k.reusableCiphertext(root, path, target, plaintext); ciphertext != nil {
-			return ciphertext, nil
+		ciphertext, legacy = k.reusableCiphertext(root, path, target, plaintext)
+	}
+	if ciphertext != nil && (!remember || !legacy) {
+		return ciphertext, nil
+	}
+	if ciphertext == nil {
+		var err error
+		ciphertext, err = encryptContent(plaintext, target.recipients)
+		if err != nil || !remember {
+			return ciphertext, err
 		}
 	}
-	ciphertext, err := encryptContent(plaintext, target.recipients)
-	if err != nil || !remember {
-		return ciphertext, err
-	}
-	if err := k.rememberCiphertext(root, target, ciphertext); err != nil {
+	if err := k.rememberCiphertext(root, target, ciphertext, legacy); err != nil {
 		return nil, err
 	}
 	return ciphertext, nil
@@ -425,24 +457,27 @@ func parseRecipients(values []string) ([]age.Recipient, error) {
 	return recipients, nil
 }
 
-func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext []byte) []byte {
+// reusableCiphertext also reports whether reuse was verified through history
+// rather than a local recipient record, so encryption can retain that proof.
+func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext []byte) ([]byte, bool) {
 	if len(k.identities) == 0 {
 		// Reuse needs decryption; avoid spawning Git when no identity can decrypt.
-		return nil
+		return nil, false
 	}
-	cache, err := gitPath(root, "git-age/recipients")
+	cache, err := k.recipientCacheDirectory(root)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	relative, _ := filepath.Rel(root, path)
 	var stale [][]byte
 	var checkedLegacy, legacy bool
 	for _, revision := range []string{"", ":2", ":3", "HEAD"} {
-		ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative))
+		ciphertext, err := k.cache.objects.blob(revision, relative)
 		if err != nil {
 			continue
 		}
 		recorded, err := os.ReadFile(filepath.Join(cache, ciphertextHash(ciphertext)))
+		needsRecord := errors.Is(err, os.ErrNotExist)
 		if err == nil {
 			if !k.matchesRecipientRecord(target, recorded) {
 				continue
@@ -471,14 +506,30 @@ func (k keys) reusableCiphertext(root, path string, target fileTarget, plaintext
 		}
 		decrypted, err := decryptContent(ciphertext, k.identities)
 		if err == nil && bytes.Equal(decrypted, plaintext) {
-			return ciphertext
+			return ciphertext, needsRecord
 		}
 	}
-	return nil
+	return nil, false
 }
 
 func (k keys) staleCiphertexts(root, path string, target fileTarget) ([][]byte, bool) {
 	relative, _ := filepath.Rel(root, path)
+	scope := filepath.Dir(path) + "\x00" + k.recipientFingerprint(target)
+	baseline, cached := k.cache.baselines[scope]
+	if !cached {
+		baseline.revision, baseline.ok = k.staleRevision(root, path, target)
+		k.cache.baselines[scope] = baseline
+	}
+	if !baseline.ok || baseline.revision == "" {
+		return nil, baseline.ok
+	}
+	if ciphertext, err := k.cache.objects.blob(baseline.revision, relative); err == nil {
+		return [][]byte{ciphertext}, true
+	}
+	return nil, true
+}
+
+func (k keys) staleRevision(root, path string, target fileTarget) (string, bool) {
 	var rulePaths []string
 	for _, rule := range target.rules {
 		rulePath, _ := filepath.Rel(root, rule)
@@ -486,37 +537,49 @@ func (k keys) staleCiphertexts(root, path string, target fileTarget) ([][]byte, 
 	}
 	history, err := git(root, append([]string{"--literal-pathspecs", "log", "--format=%H", "HEAD", "--"}, rulePaths...)...)
 	if err != nil {
-		return nil, false
+		return "", false
 	}
 	for _, commit := range strings.Fields(string(history)) {
 		for _, revision := range []string{commit, commit + "^"} {
-			if !hasCommit(root, revision) || k.rulesMatchRevision(root, path, target, revision) {
+			if !k.cache.objects.hasCommit(revision) || k.rulesMatchRevision(root, path, target, revision) {
 				continue
 			}
-			if ciphertext, err := git(root, "show", revision+":"+filepath.ToSlash(relative)); err == nil {
-				return [][]byte{ciphertext}, true
-			}
-			return nil, true
+			return revision, true
 		}
 	}
-	return nil, true
+	return "", true
 }
 
 // rulesMatchRevision compares effective recipients, including nested lists,
 // rather than patterns, comments or how recipients are split between files.
 func (k keys) rulesMatchRevision(root, path string, target fileTarget, revision string) bool {
+	scope := filepath.Dir(path) + "\x00" + revision + "\x00" + k.recipientFingerprint(target)
+	if matches, ok := k.cache.matches[scope]; ok {
+		return matches
+	}
+	matches := k.compareRulesRevision(root, path, target, revision)
+	k.cache.matches[scope] = matches
+	return matches
+}
+
+func (k keys) compareRulesRevision(root, path string, target fileTarget, revision string) bool {
 	rules := map[string][]byte{}
 	for _, rule := range target.rules {
 		rulePath, _ := filepath.Rel(root, rule)
-		if content, err := git(root, "show", revision+":"+filepath.ToSlash(rulePath)); err == nil {
+		if content := k.cache.objects.rule(revision, rulePath); content != nil {
 			rules[rule] = content
 		}
 	}
-	previousKeys, err := resolveKeys(root, root, nil, k.identitySet, rules)
-	if err != nil || previousKeys.external || previousKeys.toIdentities && !k.toIdentities {
+	previousKeys := k
+	base, err := ruleRecipients(filepath.Join(root, ".gitage"), rules)
+	if err != nil || len(base) == 0 && !k.toIdentities {
 		// An implicit original encryptor or old external configuration cannot
 		// be reconstructed from Git. A local fingerprint can still prove reuse.
 		return false
+	}
+	previousKeys.base, previousKeys.toIdentities = base, len(base) == 0
+	if previousKeys.toIdentities {
+		previousKeys.base = k.own
 	}
 	previous, err := previousKeys.describeTarget(root, path, rules)
 	if err != nil {

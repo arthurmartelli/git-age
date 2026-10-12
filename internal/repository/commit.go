@@ -27,6 +27,7 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 	if err != nil {
 		return result, err
 	}
+	defer keys.cache.objects.close()
 	initial, err := git(root, "write-tree")
 	if err != nil {
 		return result, err
@@ -38,7 +39,7 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 		if file.State != Unlocked {
 			continue
 		}
-		original, err := git(root, "cat-file", "blob", check.blobs[file.Path])
+		original, err := keys.cache.objects.read(check.blobs[file.Path])
 		if err != nil {
 			return result, err
 		}
@@ -95,9 +96,10 @@ func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]b
 	}
 	var stale []string
 	history := newRecipientHistory(root, true)
+	defer history.objects.close()
 	history.rules = rules
 	for _, file := range files {
-		content, err := git(root, "cat-file", "blob", blobs[file.Path])
+		content, err := history.objects.read(blobs[file.Path])
 		if err != nil {
 			return nil, err
 		}

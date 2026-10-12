@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -242,16 +241,7 @@ func TestCleanGitFilter(t *testing.T) {
 	t.Setenv("GIT_AGE_KEY_FILE", "")
 	t.Setenv("GIT_AGE_RECIPIENT", "")
 	directory, identity, ciphertext := cleanFixture(t, []byte("original\n"), false)
-	name := "git-age"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	executable := filepath.Join(t.TempDir(), name)
-	build := exec.Command("go", "build", "-o", executable, "./cmd/git-age")
-	build.Dir = "../.."
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
-	}
+	executable := buildGitAge(t)
 	writeFile(t, directory, ".gitattributes", "*.env filter=age\n")
 	runGit(t, directory, "config", "filter.age.clean", "\""+filepath.ToSlash(executable)+"\" clean %f")
 	runGit(t, directory, "config", "filter.age.smudge", "cat")

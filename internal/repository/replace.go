@@ -48,6 +48,7 @@ func replaceFiles(replacements []replacement) error {
 
 func forgetStat(replacements []replacement) error {
 	byRoot := map[string][]string{}
+	roots := map[string]string{}
 	for _, change := range replacements {
 		// Match Git's canonical root when a parent uses a symlink or a Windows
 		// short name, while leaving the file itself subject to regular-file checks.
@@ -55,9 +56,13 @@ func forgetStat(replacements []replacement) error {
 		if err != nil {
 			return err
 		}
-		root, err := gitRoot(directory)
-		if err != nil {
-			return err
+		root, known := roots[directory]
+		if !known {
+			root, err = gitRoot(directory)
+			if err != nil {
+				return err
+			}
+			roots[directory] = root
 		}
 		if root == "" {
 			continue

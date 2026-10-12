@@ -76,6 +76,8 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		return result, err
 	}
 	result.root = root
+	objects := newGitObjects(root)
+	defer objects.close()
 	indexGit := func(args ...string) ([]byte, error) {
 		output, err := git(root, args...)
 		if err != nil {
@@ -125,7 +127,7 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		if filepath.Base(path) != ".gitage" {
 			continue
 		}
-		content, err := indexGit("cat-file", "blob", oid)
+		content, err := objects.read(oid)
 		if err != nil {
 			return result, err
 		}
@@ -145,7 +147,7 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		if blobs[path] == "" {
 			continue
 		}
-		content, err := indexGit("cat-file", "blob", blobs[path])
+		content, err := objects.read(blobs[path])
 		if err != nil {
 			return result, err
 		}
@@ -172,7 +174,7 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		protected[file.Path] = true
 		content, ok := changed[file.Path]
 		if !ok {
-			content, err = indexGit("cat-file", "blob", blobs[file.Path])
+			content, err = objects.read(blobs[file.Path])
 			if err != nil {
 				return result, err
 			}

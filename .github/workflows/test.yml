@@ -39,7 +39,7 @@ jobs:
         with:
           go-version: '1.26.x'
           check-latest: true
-          cache: false
+          cache: true
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -66,7 +66,11 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Go tests
-        run: go test ./...
+        run: |
+          binary="$RUNNER_TEMP/git-age"
+          if [[ "$RUNNER_OS" == Windows ]]; then binary+=.exe; fi
+          go build -trimpath -o "$binary" ./cmd/git-age
+          GIT_AGE="$binary" go test ./...
 
   # Branch protection needs one stable check name across matrix changes.
   tests:
