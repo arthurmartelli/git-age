@@ -86,7 +86,7 @@ func encryptFiles(directory string, files []ProtectedFile, explicitRecipients, i
 				return nil, nil, fmt.Errorf("cannot decrypt %s: %w", file.Path, err)
 			}
 		}
-		if options.edit != nil {
+		if options.edit != nil && !options.dryRun {
 			before := plaintext
 			plaintext, err = editPlaintext(file.Path, plaintext, options.edit)
 			if err != nil {

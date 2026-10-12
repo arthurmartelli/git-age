@@ -41,8 +41,9 @@ func newRootCommand() *cobra.Command {
 		Version:       buildVersion(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("a command is required (see git-age --help)")
+			return cmd.Help()
 		},
 	}
 

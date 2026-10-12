@@ -16,9 +16,10 @@ import (
 func newEditCommand(options *globalOptions) *cobra.Command {
 	var recipients, identities []string
 	edit := &cobra.Command{
-		Use:   "edit FILE",
-		Short: "edit a protected file decrypted, then encrypt it again",
-		Args:  cobra.ExactArgs(1),
+		Use:               "edit FILE",
+		Short:             "edit a protected file decrypted, then encrypt it again",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: protectedPathCompletion(options),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
 			if !filepath.IsAbs(path) {
@@ -36,33 +37,29 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				return err
 			}
 			file := files[0]
-			if options.dryRun {
-				_, err := fmt.Fprintf(cmd.OutOrStdout(), "would edit: %s\n", file.Path)
-				return err
-			}
-			if file.State == repository.Unlocked {
+			if file.State == repository.Unlocked && !options.dryRun {
 				if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s is unlocked; editing in place\n", file.Path); err != nil {
 					return err
 				}
 			}
-			editor, err := exec.Command("git", "-C", options.directory, "var", "GIT_EDITOR").Output()
-			if err != nil {
-				return fmt.Errorf("find editor: %w", err)
-			}
-			shell, err := exec.LookPath("sh")
-			if err != nil && runtime.GOOS == "windows" {
-				// Git for Windows includes sh even when only git.exe is on PATH.
-				gitPath, gitErr := exec.Command("git", "--exec-path").Output()
-				if gitErr != nil {
-					return gitErr
+			err = repository.Edit(options.directory, file, recipients, identities, options.dryRun, func(path string) error {
+				editor, err := exec.Command("git", "-C", options.directory, "var", "GIT_EDITOR").Output()
+				if err != nil {
+					return fmt.Errorf("find editor: %w", err)
 				}
-				shell = filepath.Join(strings.TrimSpace(string(gitPath)), "..", "..", "..", "usr", "bin", "sh.exe")
-			} else if err != nil {
-				return err
-			}
-			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
-			defer stop()
-			err = repository.Edit(options.directory, file, recipients, identities, func(path string) error {
+				shell, err := exec.LookPath("sh")
+				if err != nil && runtime.GOOS == "windows" {
+					// Git for Windows includes sh even when only git.exe is on PATH.
+					gitPath, gitErr := exec.Command("git", "--exec-path").Output()
+					if gitErr != nil {
+						return gitErr
+					}
+					shell = filepath.Join(strings.TrimSpace(string(gitPath)), "..", "..", "..", "usr", "bin", "sh.exe")
+				} else if err != nil {
+					return err
+				}
+				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+				defer stop()
 				command := exec.CommandContext(ctx, shell, "-c", strings.TrimSpace(string(editor))+` "$@"`, "git-age-edit", path)
 				command.Dir = options.directory
 				command.Stdin = cmd.InOrStdin()
@@ -74,6 +71,10 @@ func newEditCommand(options *globalOptions) *cobra.Command {
 				return ctx.Err()
 			})
 			if err != nil {
+				return err
+			}
+			if options.dryRun {
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "would edit: %s\n", file.Path)
 				return err
 			}
 			if options.verbose {

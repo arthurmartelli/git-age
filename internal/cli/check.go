@@ -16,9 +16,10 @@ func newCheckCommand(options *globalOptions) *cobra.Command {
 	var staged bool
 
 	check := &cobra.Command{
-		Use:   "check [PATH ...]",
-		Short: "fail if protected files are plaintext",
-		Args:  cobra.ArbitraryArgs,
+		Use:               "check [PATH ...]",
+		Short:             "fail if protected files are plaintext",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: protectedPathCompletion(options),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var files []repository.ProtectedFile
 			var err error

@@ -12,9 +12,10 @@ func newStatusCommand(options *globalOptions) *cobra.Command {
 	var porcelain, nullTerminated bool
 
 	status := &cobra.Command{
-		Use:   "status [PATH ...]",
-		Short: "show working-tree state of protected files",
-		Args:  cobra.ArbitraryArgs,
+		Use:               "status [PATH ...]",
+		Short:             "show working-tree state of protected files",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: protectedPathCompletion(options),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := repository.ProtectedFiles(options.directory, args)
 			if err != nil {

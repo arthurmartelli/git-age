@@ -8,6 +8,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func TestBareCommandHelp(t *testing.T) {
+	for _, command := range [][]string{nil, {"history"}} {
+		var output, help, stderr bytes.Buffer
+		if code := Run(command, &output, &stderr); code != 0 || stderr.Len() != 0 {
+			t.Fatalf("%v: exit %d, stderr %q", command, code, &stderr)
+		}
+		if code := Run(append(command, "--help"), &help, &stderr); code != 0 || output.String() != help.String() || !strings.Contains(output.String(), "Usage:") {
+			t.Fatalf("%v: bare command differs from --help: %q", command, &output)
+		}
+	}
+	var output, stderr bytes.Buffer
+	if code := Run([]string{"unknown-command"}, &output, &stderr); code != 2 || output.Len() != 0 || !strings.Contains(stderr.String(), "unknown command") {
+		t.Fatalf("unknown command: exit %d, stdout %q, stderr %q", code, &output, &stderr)
+	}
+}
+
 func TestHelpManual(t *testing.T) {
 	var output bytes.Buffer
 	cmd := newHelpCommand()

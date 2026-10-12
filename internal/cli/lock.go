@@ -82,9 +82,10 @@ func newLockCommand(options *globalOptions) *cobra.Command {
 	var noReuse bool
 
 	lock := &cobra.Command{
-		Use:   "lock [PATH ...]",
-		Short: "encrypt protected working-tree files",
-		Args:  cobra.ArbitraryArgs,
+		Use:               "lock [PATH ...]",
+		Short:             "encrypt protected working-tree files",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: protectedPathCompletion(options),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := knownFiles(options.directory, args)
 			if err != nil {

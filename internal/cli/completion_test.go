@@ -2,13 +2,92 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
+
+func TestProtectedPathCompletion(t *testing.T) {
+	directory := t.TempDir()
+	initKeygenRepo(t, directory)
+	writeFile(t, directory, ".gitage", "[files]\n*.env\n!excluded.env\n")
+	writeFile(t, directory, ".gitignore", "ignored.env\n")
+	for _, path := range []string{"app.env", "excluded.env", "ignored.env", "public.txt", "public/readme.txt", "secrets/a file.env", "secrets/b.env", "secrets/public.txt", "secrets/nested/deep.env"} {
+		writeFile(t, directory, path, "fixture")
+	}
+	for _, command := range []string{"lock", "unlock", "rekey", "edit", "status", "check"} {
+		t.Run(command, func(t *testing.T) {
+			for _, test := range []struct {
+				name      string
+				directory string
+				args      []string
+				prefix    string
+				want      []string
+				noSpace   bool
+			}{
+				{name: "root", prefix: "", want: []string{"app.env", "secrets/"}},
+				{name: "file", prefix: "app", want: []string{"app.env"}},
+				{name: "directory", prefix: "sec", want: []string{"secrets/"}, noSpace: true},
+				{name: "nested", prefix: "secrets/", want: []string{"secrets/a file.env", "secrets/b.env", "secrets/nested/"}},
+				{name: "space", prefix: "secrets/a ", want: []string{"secrets/a file.env"}},
+				{name: "deep", prefix: "secrets/nested/d", want: []string{"secrets/nested/deep.env"}},
+				{name: "dot prefix", prefix: "./app", want: []string{"./app.env"}},
+				{name: "absolute", prefix: filepath.Join(directory, "app"), want: []string{filepath.ToSlash(filepath.Join(directory, "app.env"))}},
+				{name: "subdirectory", directory: filepath.Join(directory, "secrets"), prefix: "", want: []string{"a file.env", "b.env", "nested/"}},
+				{name: "unprotected", prefix: "pub"},
+				{name: "excluded", prefix: "ex"},
+				{name: "ignored", prefix: "ig"},
+				{name: "no match", prefix: "missing"},
+				{name: "additional path", args: []string{"app.env"}, prefix: "sec", want: []string{"secrets/"}, noSpace: true},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					workingDirectory := test.directory
+					if workingDirectory == "" {
+						workingDirectory = directory
+					}
+					args := append([]string{"__completeNoDesc", "-C", workingDirectory, command}, test.args...)
+					args = append(args, test.prefix)
+					var output, stderr bytes.Buffer
+					if code := Run(args, &output, &stderr); code != 0 {
+						t.Fatalf("complete: exit %d, %s", code, &stderr)
+					}
+					want := test.want
+					directive := cobra.ShellCompDirectiveNoFileComp
+					if command == "edit" && len(test.args) != 0 {
+						want = nil
+					} else if test.noSpace {
+						directive |= cobra.ShellCompDirectiveNoSpace
+					}
+					lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+					if !slices.Equal(lines[:len(lines)-1], want) || lines[len(lines)-1] != ":"+fmt.Sprint(int(directive)) {
+						t.Fatalf("suggestions %q; want %q, directive %d", output.String(), want, directive)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestProtectedPathCompletionWithoutRules(t *testing.T) {
+	directory := t.TempDir()
+	writeFile(t, directory, "public.txt", "fixture")
+	for _, rules := range []string{"", "[invalid]\n*.txt\n"} {
+		if rules != "" {
+			writeFile(t, directory, ".gitage", rules)
+		}
+		var output, stderr bytes.Buffer
+		if code := Run([]string{"__completeNoDesc", "-C", directory, "lock", ""}, &output, &stderr); code != 0 || output.String() != ":4\n" {
+			t.Fatalf("completion without valid rules: exit %d, output %q, stderr %q", code, &output, &stderr)
+		}
+	}
+}
 
 func TestCompletionScripts(t *testing.T) {
 	directory := t.TempDir()
@@ -26,6 +105,12 @@ func TestCompletionScripts(t *testing.T) {
 	if err := os.WriteFile(key, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	repo := t.TempDir()
+	initKeygenRepo(t, repo)
+	writeFile(t, repo, ".gitage", "[files]\n*.env\n")
+	writeFile(t, repo, "secret.env", "fixture")
+	writeFile(t, repo, "secrets/a file.env", "fixture")
+	writeFile(t, repo, "public.txt", "fixture")
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		t.Run(shell, func(t *testing.T) {
 			var script, stderr bytes.Buffer
@@ -69,8 +154,12 @@ printf '%s\n' "${COMPREPLY[@]}"`
 					{[]string{"git-age", "lock", "--no"}, "--no-reuse"},
 					{[]string{"git-age", "unlock", "-i", filepath.ToSlash(filepath.Join(directory, "identity k"))}, filepath.ToSlash(key)},
 					{[]string{"git-age", "help", "git-ho"}, "git-hooks"},
+					{[]string{"git-age", "-C", repo, "lock", "secrets"}, "secrets/"},
+					{[]string{"git", "age", "-C", repo, "edit", "secrets/"}, `secrets/a\ file.env`},
+					{[]string{"git-age", "-C", repo, "status", "pub"}, ""},
 				} {
 					command := exec.Command(shell, append([]string{"-c", program, "bash", path}, test.words...)...)
+					command.Dir = repo
 					output, err := command.Output()
 					if err != nil || strings.TrimSpace(string(output)) != test.want {
 						t.Errorf("%v: output %q, error %v", test.words, output, err)
@@ -96,6 +185,22 @@ _git-age`
 					output, err := exec.Command(shell, "-f", "-c", program, "zsh", path, command, "lo").CombinedOutput()
 					if err != nil || !strings.Contains(string(output), "lock:") {
 						t.Errorf("%s suggestions: %v\n%s", command, err, output)
+					}
+				}
+				for _, test := range []struct {
+					prefix string
+					want   string
+				}{
+					{"secrets", "secrets/"},
+					{"secrets/", "secrets/a file.env"},
+					{"pub", ""},
+				} {
+					command := exec.Command(shell, "-f", "-c", program+` || true`, "zsh", path, "age", "-C", repo, "lock", test.prefix)
+					command.Dir = repo
+					output, err := command.CombinedOutput()
+					got := strings.TrimSuffix(strings.TrimSpace(string(output)), ":")
+					if err != nil || got != test.want {
+						t.Errorf("path %q: output %q, error %v", test.prefix, output, err)
 					}
 				}
 				if err := os.WriteFile(filepath.Join(directory, "_git-age"), script.Bytes(), 0600); err != nil {
@@ -141,6 +246,22 @@ words=(git status) CURRENT=2
 					output, err := exec.Command(shell, "--no-config", "-c", `source $argv[1]; complete -C $argv[2]`, path, request).CombinedOutput()
 					if err != nil || !strings.Contains(string(output), "--hook-mode=always-lock") {
 						t.Errorf("%s: %v\n%s", request, err, output)
+					}
+				}
+				for _, test := range []struct {
+					words []string
+					want  string
+				}{
+					{[]string{"git-age", "-C", repo, "lock", "secrets"}, "secrets/"},
+					{[]string{"git", "age", "-C", repo, "edit", "secrets/"}, "secrets/a file.env"},
+					{[]string{"git-age", "-C", repo, "status", "pub"}, ""},
+				} {
+					command := exec.Command(shell, "--no-config", "-c", `source $argv[1]; complete -C $argv[2]`, path, shellPaths(test.words))
+					command.Dir = repo
+					output, err := command.CombinedOutput()
+					got, _, _ := strings.Cut(strings.TrimSpace(string(output)), "\t")
+					if err != nil || got != test.want {
+						t.Errorf("%v: output %q, error %v", test.words, output, err)
 					}
 				}
 			}

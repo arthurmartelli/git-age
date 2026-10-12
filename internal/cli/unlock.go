@@ -12,9 +12,10 @@ func newUnlockCommand(options *globalOptions) *cobra.Command {
 	var identities []string
 
 	unlock := &cobra.Command{
-		Use:   "unlock [PATH ...]",
-		Short: "decrypt protected working-tree files",
-		Args:  cobra.ArbitraryArgs,
+		Use:               "unlock [PATH ...]",
+		Short:             "decrypt protected working-tree files",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: protectedPathCompletion(options),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := knownFiles(options.directory, args)
 			if err != nil {

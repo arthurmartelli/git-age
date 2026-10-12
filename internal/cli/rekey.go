@@ -9,9 +9,10 @@ func newRekeyCommand(options *globalOptions) *cobra.Command {
 	var recipients, identities []string
 
 	rekey := &cobra.Command{
-		Use:   "rekey [PATH ...]",
-		Short: "re-encrypt every protected file to the current recipients",
-		Args:  cobra.ArbitraryArgs,
+		Use:               "rekey [PATH ...]",
+		Short:             "re-encrypt every protected file to the current recipients",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: protectedPathCompletion(options),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			files, err := knownFiles(options.directory, args)
 			if err != nil {

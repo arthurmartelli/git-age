@@ -2,9 +2,62 @@ package cli
 
 import (
 	"io"
+	"path/filepath"
+	"slices"
+	"strings"
 
+	"github.com/arthurmartelli/git-age/internal/repository"
 	"github.com/spf13/cobra"
 )
+
+func protectedPathCompletion(options *globalOptions) func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective) {
+	return func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		directive := cobra.ShellCompDirectiveNoFileComp
+		if cmd.Name() == "edit" && len(args) != 0 {
+			return nil, directive
+		}
+		files, err := repository.ProtectedFiles(options.directory, nil)
+		if err != nil {
+			return nil, directive
+		}
+		directory, err := filepath.Abs(options.directory)
+		if err != nil {
+			return nil, directive
+		}
+		base, partial := filepath.Split(toComplete)
+		prefix := filepath.ToSlash(filepath.Clean(base))
+		if prefix == "." {
+			prefix = ""
+		} else if !strings.HasSuffix(prefix, "/") {
+			prefix += "/"
+		}
+		var candidates []string
+		for _, file := range files {
+			path := file.Path
+			if filepath.IsAbs(base) {
+				path = filepath.ToSlash(filepath.Join(directory, path))
+			}
+			if !strings.HasPrefix(path, prefix) || strings.ContainsAny(path, "\t\r\n") {
+				continue
+			}
+			name, _, isDirectory := strings.Cut(strings.TrimPrefix(path, prefix), "/")
+			if !strings.HasPrefix(name, partial) {
+				continue
+			}
+			candidate := filepath.ToSlash(base) + name
+			if isDirectory {
+				candidate += "/"
+			}
+			candidates = append(candidates, candidate)
+		}
+		slices.Sort(candidates)
+		candidates = slices.Compact(candidates)
+		if len(candidates) == 1 && strings.HasSuffix(candidates[0], "/") {
+			directive |= cobra.ShellCompDirectiveNoSpace
+		}
+		return candidates, directive
+	}
+}
 
 func newCompletionCommand() *cobra.Command {
 	return &cobra.Command{

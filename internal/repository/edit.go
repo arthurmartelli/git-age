@@ -7,15 +7,18 @@ import (
 	"path/filepath"
 )
 
-func Edit(directory string, file ProtectedFile, recipients, identities []string, edit func(string) error) error {
+func Edit(directory string, file ProtectedFile, recipients, identities []string, dryRun bool, edit func(string) error) error {
 	if file.State == Unlocked {
+		if dryRun {
+			return nil
+		}
 		path, err := filepath.Abs(nativePath(directory, file.Path))
 		if err != nil {
 			return err
 		}
 		return edit(path)
 	}
-	_, _, err := encryptFiles(directory, []ProtectedFile{file}, recipients, identities, encryptionOptions{edit: edit})
+	_, _, err := encryptFiles(directory, []ProtectedFile{file}, recipients, identities, encryptionOptions{edit: edit, dryRun: dryRun})
 	return err
 }
 

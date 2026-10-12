@@ -60,7 +60,7 @@ func TestEdit(t *testing.T) {
 				args = []string{"-i", "identity file.key"}
 			}
 			if action == "dry run" {
-				args = []string{"-n", "-i", "missing.key"}
+				args = []string{"-n"}
 			}
 			if action == "unprotected" {
 				name = "public.txt"
@@ -116,6 +116,70 @@ func TestEdit(t *testing.T) {
 			info, err := os.Stat(source)
 			if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 				t.Fatalf("original permissions: %v, %v", info, err)
+			}
+		})
+	}
+}
+
+func TestEditDryRun(t *testing.T) {
+	for _, scenario := range []string{"locked", "armored", "unlocked", "wrong key", "corrupt ciphertext", "missing key", "missing identity", "invalid recipient"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory := t.TempDir()
+			initKeygenRepo(t, directory)
+			t.Setenv("GIT_AGE_KEY_FILE", "")
+			t.Setenv("GIT_AGE_RECIPIENT", "")
+			t.Setenv("GIT_EDITOR", "git-age-editor-that-does-not-exist")
+			scratch := t.TempDir()
+			for _, variable := range []string{"TMPDIR", "TMP", "TEMP"} {
+				t.Setenv(variable, scratch)
+			}
+			identity := newIdentity(t)
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n[recipients]\n"+identity.Recipient().String()+"\n")
+			if scenario != "missing key" {
+				writeFile(t, directory, ".gitage.key", identity.String()+"\n")
+			}
+			content := encryptFixture(t, identity.Recipient(), "secret", scenario == "armored")
+			var flags []string
+			wantError := ""
+			switch scenario {
+			case "unlocked":
+				content = []byte("plaintext")
+				flags = []string{"-i", "missing.key", "-r", "invalid"}
+			case "wrong key":
+				content = encryptFixture(t, newIdentity(t).Recipient(), "secret", false)
+				wantError = "cannot decrypt secret.env"
+			case "corrupt ciphertext":
+				content[len(content)-1] ^= 1
+				wantError = "cannot decrypt secret.env"
+			case "missing key":
+				wantError = "no identity configured"
+			case "missing identity":
+				flags = []string{"-i", "missing.key"}
+				wantError = "missing.key"
+			case "invalid recipient":
+				flags = []string{"-r", "invalid"}
+				wantError = "invalid recipient"
+			}
+			writeFile(t, directory, "secret.env", string(content))
+			before := installSnapshot(t, directory)
+			args := append([]string{"-n"}, flags...)
+			output, err := runCommand(directory, "edit", append(args, "secret.env")...)
+			if wantError == "" {
+				if err != nil || output != "would edit: secret.env\n" {
+					t.Fatalf("dry run: %q, %v", output, err)
+				}
+			} else {
+				if err == nil || !strings.Contains(err.Error(), wantError) || output != "" {
+					t.Fatalf("dry run: %q, %v; want %q", output, err, wantError)
+				}
+				_, realErr := runCommand(directory, "edit", append(flags, "secret.env")...)
+				if realErr == nil || realErr.Error() != err.Error() {
+					t.Fatalf("validation differs: dry run %v, real edit %v", err, realErr)
+				}
+			}
+			assertSnapshotUnchanged(t, directory, before)
+			if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+				t.Fatalf("temporary files left behind: %v, %v", entries, err)
 			}
 		})
 	}
