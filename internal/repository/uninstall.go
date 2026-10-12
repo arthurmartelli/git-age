@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -88,8 +89,24 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 			}})
 		}
 	}
+	output, err = git(root, "config", "--null", "--name-only", "--get-regexp", `^age\.(keyfile|recipient|trustedrecipients)$`)
+	if err != nil && !exitCode(err, 1) {
+		return err
+	}
+	var keptConfig []string
+	configuredKeys := strings.Split(string(output), "\x00")
+	for _, key := range []string{"age.keyFile", "age.recipient", "age.trustedRecipients"} {
+		if slices.Contains(configuredKeys, strings.ToLower(key)) {
+			keptConfig = append(keptConfig, key)
+		}
+	}
 	for _, event := range kept {
 		if _, err := fmt.Fprintf(stderr, "Kept %s hook: not managed by git-age\n", event); err != nil {
+			return err
+		}
+	}
+	if len(keptConfig) != 0 {
+		if _, err := fmt.Fprintf(stderr, "Kept user Git config: %s\n", strings.Join(keptConfig, ", ")); err != nil {
 			return err
 		}
 	}

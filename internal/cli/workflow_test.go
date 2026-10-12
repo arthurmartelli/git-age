@@ -183,7 +183,7 @@ func TestTeamWorkflow(t *testing.T) {
 	if !bytes.HasPrefix(readFile(t, directory, "secret.env"), []byte("age-encryption.org/v1\n")) {
 		t.Fatal("uninstall unlocked file")
 	}
-	if output := mustCommand(t, directory, "uninstall"); output != "Kept post-rewrite hook: not managed by git-age\ngit-age: nothing to uninstall\n" {
+	if output := mustCommand(t, directory, "uninstall"); output != "Kept post-rewrite hook: not managed by git-age\nKept user Git config: age.keyFile\ngit-age: nothing to uninstall\n" {
 		t.Fatalf("second uninstall: %q", output)
 	}
 	if err := os.Remove(filepath.Join(hooks, "post-rewrite")); err != nil {

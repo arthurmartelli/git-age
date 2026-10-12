@@ -98,6 +98,10 @@ func TestUninstall(t *testing.T) {
 			if err != nil || !strings.Contains(output, "uninstalled Git integration") {
 				t.Fatalf("uninstall: %v, %s", err, output)
 			}
+			keptConfig := "Kept user Git config: age.keyFile, age.recipient, age.trustedRecipients\n"
+			if !strings.Contains(output, keptConfig) {
+				t.Fatalf("missing kept config: %q", output)
+			}
 			for _, event := range []string{"pre-commit", "post-commit", "pre-push", "post-checkout", "post-merge", "post-rewrite"} {
 				if _, err := os.Lstat(filepath.Join(hooks, event)); !os.IsNotExist(err) {
 					t.Errorf("hook %s remains: %v", event, err)
@@ -138,8 +142,58 @@ func TestUninstall(t *testing.T) {
 			}
 			before := installSnapshot(t, directory)
 			output, err = runCommand(workingDirectory, "uninstall")
-			if err != nil || output != "git-age: nothing to uninstall\n" || !reflect.DeepEqual(before, installSnapshot(t, directory)) {
+			if err != nil || output != keptConfig+"git-age: nothing to uninstall\n" || !reflect.DeepEqual(before, installSnapshot(t, directory)) {
 				t.Fatalf("repeat uninstall: %v, %q", err, output)
+			}
+		})
+	}
+}
+
+func TestUninstallReportsUserConfig(t *testing.T) {
+	for _, scenario := range []struct {
+		name, config, keys string
+		global             bool
+	}{
+		{name: "no user config"},
+		{name: "key file", config: "[age]\nkeyFile = private.key\n", keys: "age.keyFile"},
+		{name: "recipient", config: "[age]\nrecipient = age1keep\n", keys: "age.recipient"},
+		{name: "trust", config: "[age]\ntrustedRecipients = trusted-hash\n", keys: "age.trustedRecipients"},
+		{name: "duplicate and empty values", config: "[AGE]\nKEYFILE = private.key\nkeyFile = other.key\nrecipient =\ntrustedRecipients\n", keys: "age.keyFile, age.recipient, age.trustedRecipients"},
+		{name: "inherited", config: "[age]\nkeyFile = private.key\nrecipient = age1keep\ntrustedRecipients = trusted-hash\n", keys: "age.keyFile, age.recipient, age.trustedRecipients", global: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			directory := t.TempDir()
+			initKeygenRepo(t, directory)
+			if scenario.global {
+				globalDirectory := t.TempDir()
+				writeFile(t, globalDirectory, "gitconfig", scenario.config)
+				t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
+			} else {
+				config := installGitPath(t, directory, "config")
+				content := readFile(t, filepath.Dir(config), "config")
+				writeFile(t, filepath.Dir(config), "config", string(content)+scenario.config)
+			}
+			mustCommand(t, directory, "install")
+			want := ""
+			if scenario.keys != "" {
+				want = "Kept user Git config: " + scenario.keys + "\n"
+			}
+			for _, args := range [][]string{{"-n"}, nil, nil} {
+				before := installSnapshot(t, directory)
+				var stdout, stderr bytes.Buffer
+				root := newRootCommand()
+				root.SetOut(&stdout)
+				root.SetErr(&stderr)
+				root.SetArgs(append([]string{"-C", directory, "uninstall"}, args...))
+				if err := root.Execute(); err != nil {
+					t.Fatal(err)
+				}
+				if stderr.String() != want {
+					t.Fatalf("uninstall %v: got %q, want %q", args, &stderr, want)
+				}
+				if len(args) != 0 && !reflect.DeepEqual(before, installSnapshot(t, directory)) {
+					t.Fatal("dry run changed repository files")
+				}
 			}
 		})
 	}
