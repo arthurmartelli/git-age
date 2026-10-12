@@ -160,24 +160,25 @@ func TestUninstall(t *testing.T) {
 
 func TestUninstallReportsUserConfig(t *testing.T) {
 	for _, scenario := range []struct {
-		name, config, keys string
-		global             bool
+		name, config, globalConfig, keys string
 	}{
 		{name: "no user config"},
 		{name: "key file", config: "[age]\nkeyFile = private.key\n", keys: "age.keyFile"},
 		{name: "recipient", config: "[age]\nrecipient = age1keep\n", keys: "age.recipient"},
 		{name: "trust", config: "[age]\ntrustedRecipients = trusted-hash\n", keys: "age.trustedRecipients"},
 		{name: "duplicate and empty values", config: "[AGE]\nKEYFILE = private.key\nkeyFile = other.key\nrecipient =\ntrustedRecipients\n", keys: "age.keyFile, age.recipient, age.trustedRecipients"},
-		{name: "inherited", config: "[age]\nkeyFile = private.key\nrecipient = age1keep\ntrustedRecipients = trusted-hash\n", keys: "age.keyFile, age.recipient, age.trustedRecipients", global: true},
+		{name: "inherited", globalConfig: "[age]\nkeyFile = private.key\nrecipient = age1keep\ntrustedRecipients = trusted-hash\n"},
+		{name: "mixed scopes", config: "[age]\nrecipient = age1local\n", globalConfig: "[age]\nkeyFile = private.key\nrecipient = age1global\ntrustedRecipients = trusted-hash\n", keys: "age.recipient"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			directory := t.TempDir()
 			initKeygenRepo(t, directory)
-			if scenario.global {
+			if scenario.globalConfig != "" {
 				globalDirectory := t.TempDir()
-				writeFile(t, globalDirectory, "gitconfig", scenario.config)
+				writeFile(t, globalDirectory, "gitconfig", scenario.globalConfig)
 				t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(globalDirectory, "gitconfig"))
-			} else {
+			}
+			if scenario.config != "" {
 				config := installGitPath(t, directory, "config")
 				content := readFile(t, filepath.Dir(config), "config")
 				writeFile(t, filepath.Dir(config), "config", string(content)+scenario.config)
@@ -202,6 +203,11 @@ func TestUninstallReportsUserConfig(t *testing.T) {
 				}
 				if len(args) != 0 && !reflect.DeepEqual(before, installSnapshot(t, directory)) {
 					t.Fatal("dry run changed repository files")
+				}
+			}
+			if scenario.globalConfig != "" {
+				if content := readFile(t, filepath.Dir(os.Getenv("GIT_CONFIG_GLOBAL")), "gitconfig"); string(content) != scenario.globalConfig {
+					t.Fatal("uninstall changed global user config")
 				}
 			}
 		})

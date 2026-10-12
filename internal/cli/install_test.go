@@ -13,6 +13,72 @@ import (
 	"testing"
 )
 
+func TestInstallWarnsWhenExecutableMissingFromPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("isolating Git on PATH requires a symlink")
+	}
+	gitExecutable, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"missing", "not executable", "available", "dry run", "failed install"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory := t.TempDir()
+			if scenario != "failed install" {
+				initKeygenRepo(t, directory)
+			}
+			bin := t.TempDir()
+			if err := os.Symlink(gitExecutable, filepath.Join(bin, "git")); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "available" || scenario == "not executable" {
+				mode := os.FileMode(0755)
+				if scenario == "not executable" {
+					mode = 0644
+				}
+				if err := os.WriteFile(filepath.Join(bin, "git-age"), []byte("#!/bin/sh\nexit 0\n"), mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", bin)
+			before := installSnapshot(t, directory)
+			var stdout, stderr bytes.Buffer
+			args := []string{"-C", directory, "install"}
+			if scenario == "dry run" {
+				args = append(args, "-n")
+			}
+			code := Run(args, &stdout, &stderr)
+			if scenario == "failed install" {
+				if code != 2 || strings.Contains(stderr.String(), "warning:") {
+					t.Fatalf("failed install: exit %d, stderr %q", code, &stderr)
+				}
+				return
+			}
+			if code != 0 {
+				t.Fatalf("install: exit %d, stderr %q", code, &stderr)
+			}
+			if scenario == "available" {
+				if stderr.Len() != 0 {
+					t.Fatalf("unnecessary PATH warning: %s", &stderr)
+				}
+			} else {
+				for _, expected := range []string{"warning: git-age is not on PATH", "hooks run `git age`", "Add the git-age executable's directory to PATH"} {
+					if !strings.Contains(stderr.String(), expected) || strings.Contains(stdout.String(), expected) {
+						t.Fatalf("missing stderr warning %q: stdout %q, stderr %q", expected, &stdout, &stderr)
+					}
+				}
+			}
+			if scenario == "dry run" {
+				assertSnapshotUnchanged(t, directory, before)
+			} else {
+				if _, err := os.Stat(installGitPath(t, directory, "hooks/pre-commit")); err != nil {
+					t.Fatalf("warning blocked hook installation: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestInstall(t *testing.T) {
 	for _, scenario := range []string{"default", "subdirectory", "relative hooks path", "absolute hooks path", "linked worktree", "no rules"} {
 		t.Run(scenario, func(t *testing.T) {

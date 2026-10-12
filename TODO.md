@@ -12,18 +12,18 @@ Pending work on the Go port before merging `go-port` into `main`.
 
 ## UX
 
-- [ ] Help topic lookup: match by section word, unique prefix and any case
+- [x] Help topic lookup: match by section word, unique prefix and any case
   (`help hooks`, `help team`, `help INTEG`), and list topics on an unknown or
   ambiguous name (`cli/help.go:55-71`). Decide whether sections or commands win
   for `help trust`.
-- [ ] `install`: warn when `git-age` isn't on `PATH` (hooks run `git age`).
-- [ ] `uninstall`: the "Kept user Git config" message reads every config scope
+- [x] `install`: warn when `git-age` isn't on `PATH` (hooks run `git age`).
+- [x] `uninstall`: the "Kept user Git config" message reads every config scope
   (`git config --get-regexp` without `--local`, `repository/uninstall.go:92`),
   so a global `age.keyFile` is reported as kept in the repo. Query `--local` only.
 
 ## Tests
 
-- [ ] `help`: topic matching (blocked on the UX item above; `TestHelpTopic` only
+- [x] `help`: topic matching (blocked on the UX item above; `TestHelpTopic` only
   checks exact names). `--help` still doesn't mention `git-age help`: Cobra's
   footer says `Use "git-age [command] --help"`. Change the footer, then test it.
 - [ ] Plaintext push refusal message includes `GIT_AGE_ALLOW_PLAINTEXT_PUSH=1`.

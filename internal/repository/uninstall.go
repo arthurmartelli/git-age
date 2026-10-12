@@ -100,7 +100,7 @@ func Uninstall(directory string, dryRun bool, stdout, stderr io.Writer) error {
 			}})
 		}
 	}
-	output, err = git(root, "config", "--null", "--name-only", "--get-regexp", `^age\.(keyfile|recipient|trustedrecipients)$`)
+	output, err = git(root, "config", "--local", "--null", "--name-only", "--get-regexp", `^age\.(keyfile|recipient|trustedrecipients)$`)
 	if err != nil && !exitCode(err, 1) {
 		return err
 	}

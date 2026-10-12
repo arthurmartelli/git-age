@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+	"os/exec"
 	"strings"
 
 	"github.com/arthurmartelli/git-age/internal/repository"
@@ -16,7 +18,14 @@ func newInstallCommand(global *globalOptions) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			options.DryRun = global.dryRun
-			return repository.Install(global.directory, options, cmd.OutOrStdout())
+			if err := repository.Install(global.directory, options, cmd.OutOrStdout()); err != nil {
+				return err
+			}
+			if _, err := exec.LookPath("git-age"); err != nil {
+				_, err = fmt.Fprintln(cmd.ErrOrStderr(), "git-age: warning: git-age is not on PATH; hooks run `git age`. Add the git-age executable's directory to PATH before using the hooks.")
+				return err
+			}
+			return nil
 		},
 	}
 

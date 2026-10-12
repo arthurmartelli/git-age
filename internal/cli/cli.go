@@ -104,6 +104,7 @@ func newRootCommand() *cobra.Command {
 	flags.BoolVarP(&options.verbose, "verbose", "v", false, "show detailed operation information")
 
 	root.SetVersionTemplate("git-age {{.Version}}\n")
+	root.SetUsageTemplate(root.UsageTemplate() + "\nUse \"{{.Root.Name}} help [TOPIC]\" for the manual or a section.\n")
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.SetHelpCommand(newHelpCommand())
 	root.AddCommand(

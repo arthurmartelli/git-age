@@ -55,14 +55,46 @@ func newHelpCommand() *cobra.Command {
 			if len(args) == 0 {
 				return writeHelp(cmd, manual)
 			}
-			if section, ok := sections[args[0]]; len(args) == 1 && ok {
-				return writeHelp(cmd, section)
-			}
-
 			root := cmd.Root()
-			topic, rest, err := root.Find(args)
+			normalized := make([]string, len(args))
+			for i, arg := range args {
+				normalized[i] = strings.ToLower(arg)
+			}
+			// Exact command names take precedence over section words.
+			topic, rest, err := root.Find(normalized)
 			if err != nil || topic == root || len(rest) != 0 {
-				return fmt.Errorf("unknown help command %q (see git-age --help)", strings.Join(args, " "))
+				var names, matches, commands []string
+				for name := range sections {
+					names = append(names, name)
+				}
+				slices.Sort(names)
+				if len(args) == 1 {
+					query := strings.TrimPrefix(normalized[0], ".")
+					if section, ok := sections[query]; ok {
+						return writeHelp(cmd, section)
+					}
+					for _, name := range names {
+						if query != "" && (strings.HasPrefix(name, query) || slices.ContainsFunc(strings.Split(name, "-"), func(word string) bool {
+							return strings.HasPrefix(word, query)
+						})) {
+							matches = append(matches, name)
+						}
+					}
+					if len(matches) == 1 {
+						return writeHelp(cmd, sections[matches[0]])
+					}
+				}
+				for _, command := range root.Commands() {
+					if !command.Hidden {
+						commands = append(commands, command.Name())
+					}
+				}
+				slices.Sort(commands)
+				available := fmt.Sprintf("\nAvailable topics: %s\nCommands: %s", strings.Join(names, ", "), strings.Join(commands, ", "))
+				if len(matches) > 1 {
+					return fmt.Errorf("ambiguous help topic %q (matches: %s)%s", args[0], strings.Join(matches, ", "), available)
+				}
+				return fmt.Errorf("unknown help command or topic %q%s", strings.Join(args, " "), available)
 			}
 
 			topic.InitDefaultHelpFlag()

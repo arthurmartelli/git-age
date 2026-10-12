@@ -121,6 +121,8 @@ COMMANDS
         merge driver.
         `--hook-mode` selects the pre-commit policy: interactive,
         always-lock, or abort.
+        Warn if the git-age executable is missing from PATH, since hooks
+        run `git age`. Add its directory to PATH before using the hooks.
 
     uninstall
         Remove the Git integration installed by git-age.
@@ -167,6 +169,12 @@ COMMANDS
     help [TOPIC|COMMAND...]
         Show this manual, one section, or a command's options.
         For example: `git-age help history rekey`.
+
+        Topics accept section words and unique prefixes in any case:
+        `help hooks`, `help team`, `help INTEG`. Unknown or ambiguous
+        topics list the available sections and commands. Exact command
+        names win: `help trust` shows command options; use
+        `help recipient-trust` for the manual section.
 
         On a terminal, use GIT_PAGER, then PAGER, then `less -FRX`.
         An empty pager setting or `cat` disables paging. Output to a
@@ -546,6 +554,8 @@ installed by `git-age`, and the ciphertext recipient cache.
 
 Use `git-age -n uninstall` to preview the removals. Hooks belonging to
 other tools and attributes outside the generated block are kept.
+The "Kept user Git config" message lists only settings in the local
+repository config. Global and system settings remain untouched.
 
 It does not remove:
 

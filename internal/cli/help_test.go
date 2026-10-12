@@ -97,7 +97,7 @@ func TestHelpUnknownCommand(t *testing.T) {
 	root.AddCommand(help, newLockCommand(&globalOptions{}))
 
 	err := help.RunE(help, []string{"lockd"})
-	if err == nil || err.Error() != `unknown help command "lockd" (see git-age --help)` {
+	if err == nil || !strings.Contains(err.Error(), `unknown help command or topic "lockd"`) || !strings.Contains(err.Error(), "Available topics: ") || !strings.Contains(err.Error(), "git-hooks") || !strings.Contains(err.Error(), "Commands: help, lock") {
 		t.Errorf("unexpected error: %v", err)
 	}
 	if output.Len() != 0 {
@@ -136,19 +136,66 @@ func TestHelpHistorySubcommands(t *testing.T) {
 }
 
 func TestHelpTopic(t *testing.T) {
-	for _, topic := range []string{"commands", "git-hooks", "gitage", "shell-completion"} {
-		t.Run(topic, func(t *testing.T) {
+	for _, test := range []struct{ topic, heading string }{
+		{"commands", "COMMANDS"},
+		{"git-hooks", "GIT HOOKS"},
+		{"hooks", "GIT HOOKS"},
+		{"HOoKs", "GIT HOOKS"},
+		{"team", "TEAMWORK"},
+		{"INTEG", "GIT INTEGRATION"},
+		{"inteGRation", "GIT INTEGRATION"},
+		{"quick", "QUICK START"},
+		{"start", "QUICK START"},
+		{"gitage", ".GITAGE"},
+		{".GITAGE", ".GITAGE"},
+		{"shell-completion", "SHELL COMPLETION"},
+		{"RECIPIENT-TRUST", "RECIPIENT TRUST"},
+	} {
+		t.Run(test.topic, func(t *testing.T) {
 			var output, stderr bytes.Buffer
-			if code := Run([]string{"help", topic}, &output, &stderr); code != 0 {
+			if code := Run([]string{"help", test.topic}, &output, &stderr); code != 0 || stderr.Len() != 0 {
 				t.Fatalf("help: exit %d, %s", code, &stderr)
 			}
-			heading := strings.ToUpper(strings.ReplaceAll(topic, "-", " "))
-			if topic == "gitage" {
-				heading = ".GITAGE"
-			}
-			if !strings.HasPrefix(output.String(), heading+"\n") || strings.Contains(output.String(), "\nDEPENDENCIES\n") {
+			if !strings.HasPrefix(output.String(), test.heading+"\n") || strings.Contains(output.String(), "\nDEPENDENCIES\n") {
 				t.Fatalf("wrong manual section: %s", &output)
 			}
 		})
+	}
+}
+
+func TestHelpAmbiguousTopic(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"help", "GIT"}, &stdout, &stderr); code != 2 || stdout.Len() != 0 {
+		t.Fatalf("ambiguous help: exit %d, stdout %q, stderr %q", code, &stdout, &stderr)
+	}
+	for _, expected := range []string{`ambiguous help topic "GIT"`, "matches: git-hooks, git-integration, git-stash, gitage", "Available topics:", "teamwork", "Commands:", "lock"} {
+		if !strings.Contains(stderr.String(), expected) {
+			t.Errorf("ambiguous help omitted %q: %s", expected, &stderr)
+		}
+	}
+}
+
+func TestHelpCommandsWinAndIgnoreCase(t *testing.T) {
+	for _, command := range [][]string{{"TRUST"}, {"HISTORY", "ReKeY"}, {"COMPLETION"}} {
+		var help, direct, stderr bytes.Buffer
+		if code := Run(append([]string{"help"}, command...), &help, &stderr); code != 0 {
+			t.Fatalf("help %v: exit %d, %s", command, code, &stderr)
+		}
+		var args []string
+		for _, arg := range command {
+			args = append(args, strings.ToLower(arg))
+		}
+		if code := Run(append(args, "--help"), &direct, &stderr); code != 0 || help.String() != direct.String() {
+			t.Fatalf("help %v differs from command help: exit %d, %s", command, code, &stderr)
+		}
+	}
+}
+
+func TestHelpFooter(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"history", "--help"}, {"lock", "--help"}} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(args, &stdout, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(stdout.String(), `Use "git-age help [TOPIC]" for the manual or a section.`) {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, &stdout, &stderr)
+		}
 	}
 }
