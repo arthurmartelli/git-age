@@ -111,9 +111,6 @@ func pruneRecipientCache(root, directory string, now time.Time) error {
 		return err // Don't remove anything if the retention set couldn't be read.
 	}
 	for _, name := range expired {
-		if live[name] {
-			continue
-		}
 		path := filepath.Join(directory, name)
 		// Another process may have refreshed or removed the record meanwhile.
 		info, err := os.Lstat(path)
@@ -124,7 +121,14 @@ func pruneRecipientCache(root, directory string, now time.Time) error {
 			return err
 		}
 		if info.Mode().IsRegular() && info.ModTime().Before(cutoff) {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if live[name] {
+				// Don't rescan the repository on every encryption for a live
+				// record that has already outlasted the grace period.
+				err = os.Chtimes(path, now, now)
+			} else {
+				err = os.Remove(path)
+			}
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
 		}
@@ -133,6 +137,11 @@ func pruneRecipientCache(root, directory string, now time.Time) error {
 }
 
 func liveCiphertextHashes(root string) (map[string]bool, error) {
+	reader, err := newObjectReader(root)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.close()
 	output, err := git(root, "ls-files", "--stage", "-z")
 	if err != nil {
 		return nil, err
@@ -142,10 +151,8 @@ func liveCiphertextHashes(root string) (map[string]bool, error) {
 		return nil, err
 	}
 	oids := map[string]bool{}
-	for _, entry := range entries {
-		if regularMode(entry.mode) || entry.mode == "120000" {
-			oids[entry.oid] = true // Includes stages 1, 2 and 3 during conflicts.
-		}
+	if err := collectProtectedBlobOIDs(root, entries, reader, oids); err != nil {
+		return nil, err
 	}
 	head, err := git(root, "rev-parse", "--verify", "--quiet", "HEAD^{tree}")
 	if err != nil && !exitCode(err, 1) {
@@ -156,19 +163,19 @@ func liveCiphertextHashes(root string) (map[string]bool, error) {
 		if err != nil {
 			return nil, err
 		}
+		var entries []stageEntry
 		for _, record := range bytes.Split(output, []byte{0}) {
-			header, _, _ := strings.Cut(string(record), "\t")
+			header, path, ok := strings.Cut(string(record), "\t")
 			fields := strings.Fields(header)
-			if len(fields) == 3 && fields[1] == "blob" {
-				oids[fields[2]] = true
+			if !ok || len(fields) != 3 || fields[1] != "blob" {
+				continue
 			}
+			entries = append(entries, stageEntry{fields[0], fields[2], "0", path})
+		}
+		if err := collectProtectedBlobOIDs(root, entries, reader, oids); err != nil {
+			return nil, err
 		}
 	}
-	reader, err := newObjectReader(root)
-	if err != nil {
-		return nil, err
-	}
-	defer reader.close()
 	live := map[string]bool{}
 	for oid := range oids {
 		content, err := reader.read(oid)
@@ -193,4 +200,53 @@ func liveCiphertextHashes(root string) (map[string]bool, error) {
 		}
 	}
 	return live, nil
+}
+
+// Read only rule blobs and protected file blobs from each snapshot. When rules
+// conflict, retain all stages of any path protected by any rule version.
+func collectProtectedBlobOIDs(root string, entries []stageEntry, reader *objectReader, oids map[string]bool) error {
+	blobs := map[string][]string{}
+	rulesByStage := map[string]map[string][]byte{"0": {}}
+	var candidates []string
+	for _, entry := range entries {
+		if !regularMode(entry.mode) && entry.mode != "120000" {
+			continue
+		}
+		path := nativePath(root, entry.path)
+		if _, exists := blobs[entry.path]; !exists {
+			candidates = append(candidates, path)
+		}
+		blobs[entry.path] = append(blobs[entry.path], entry.oid)
+		if filepath.Base(entry.path) != ".gitage" || !regularMode(entry.mode) {
+			continue
+		}
+		content, err := reader.read(entry.oid)
+		if err != nil {
+			return err
+		}
+		if rulesByStage[entry.stage] == nil {
+			rulesByStage[entry.stage] = map[string][]byte{}
+		}
+		rulesByStage[entry.stage][path] = content
+	}
+	ignoreCase := ruleIgnoreCase(root, true)
+	for _, rules := range rulesByStage {
+		// Unconflicted rules apply to every conflict stage.
+		for path, content := range rulesByStage["0"] {
+			rules[path] = content
+		}
+		if len(rules) == 0 {
+			continue
+		}
+		files, err := matchProtectedFiles(root, root, candidates, rules, ignoreCase)
+		if err != nil {
+			return err
+		}
+		for _, file := range files {
+			for _, oid := range blobs[file.Path] {
+				oids[oid] = true
+			}
+		}
+	}
+	return nil
 }

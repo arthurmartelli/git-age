@@ -4,35 +4,11 @@ Pending work on the Go port before merging `go-port` into `main`.
 
 ## Correctness
 
-- [x] `check --staged` doesn't report stale recipients; only the pre-commit hook
-  computes them (`repository/check.go:166`).
-- [x] Stale-recipient detection only compares against HEAD (`commit.go:108-158`),
-  so files left stale by earlier commits aren't flagged. Add rekey/`git add`
-  advice to the warning.
-- [x] `lock` doesn't warn about stale recipients afterwards (`cli/lock.go:89-108`).
-- [x] `unlock`, `rekey` and `edit` don't refresh the `.git/info/attributes` block;
-  only `lock` and the hooks do.
-- [x] Reject invalid `GIT_AGE_ALLOW_*` values (e.g. `maybe`) instead of silently
-  treating them as false (`cli/check.go:107-110`).
-- [x] Expand `~` in `-i`, `GIT_AGE_KEY_FILE` and `age.keyFile` paths
-  (`identities.go:59,76`, `git.go:79`).
-- [x] Skip empty `GIT_AGE_KEY_FILE` entries (`a::b`) and de-duplicate identity
-  paths.
-- [x] Decide whether an empty value should clear earlier values for every config
-  key or only `age.keyFile` (`identities.go:17-35`); treat whitespace-only as
-  empty.
-- [x] Handle lone `\r` line endings in `.gitage` (`files.go:224`); they currently
-  error.
-- [x] The ciphertext fingerprint cache in `.git/git-age/recipients`
-  (`repository/recipients_cache.go`) gains one file per encryption and is never
-  pruned. `uninstall` doesn't remove it either. When pruning, keep entries for
-  ciphertext in the index (all stages), HEAD, and locked protected files in the
-  working tree, since `lock` records the fingerprint before the file is staged.
-  Also keep entries newer than a 30-day grace period, so ciphertext on
-  other branches or in the stash survives a branch switch. Remove the directory
-  on uninstall.
-- [x] Tolerate a BEGIN marker without END in `.git/info/attributes`
-  (`attributes.go:324`), or give a clear repair message.
+- [x] Cache pruning reads every blob in HEAD's tree, not just protected files
+  (`liveCiphertextHashes`, `repository/recipients_cache.go`). Expired records
+  that are still live are kept but never touched, so once any record is older
+  than 30 days, every encrypting command scans the whole tree again. Limit the
+  scan to protected paths, and refresh the mtime of live records you keep.
 
 ## UX
 
@@ -54,3 +30,8 @@ Pending work on the Go port before merging `go-port` into `main`.
 - [ ] `lock -i` outside Git with no `[recipients]` encrypts to your own identity.
 - [ ] `./path` arguments from a subdirectory.
 - [ ] Unknown shell message for `completion`.
+- [ ] Flaky: `TestTrustPinsAndLockRefusesChanges` failed once with
+  `lstat .git/objects/maintenance.lock: no such file or directory` and passed
+  in 10 reruns. Git's background auto-maintenance races `installSnapshot` walking
+  `.git`. Set `maintenance.auto=false` and `gc.auto=0` in the tests' isolated Git
+  config.

@@ -670,10 +670,13 @@ Without a record, externally configured recipients require fresh
 encryption once before their ciphertext can be reused.
 
 Encryption prunes cache entries older than 30 days when their ciphertext
-is absent from the index, HEAD and protected locked working-tree files.
-All index stages are retained during conflicts. The 30-day grace period
-keeps recent ciphertext on other branches or in the stash through branch
-switches. `uninstall` removes the cache directory.
+is absent from protected paths in the index, HEAD and working tree.
+The index and HEAD use their own `.gitage` rules. During conflicts, all
+index stages of paths protected by any rule version are retained.
+Retained live records get a fresh timestamp to avoid repeated scans.
+The 30-day grace period keeps recent ciphertext on other branches or
+in the stash through branch switches. `uninstall` removes the cache
+directory.
 
 Ciphertext is not reused after the recipient list changes.
 
