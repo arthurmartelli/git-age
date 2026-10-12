@@ -514,7 +514,7 @@ func (k keys) rulesMatchRevision(root, path string, target fileTarget, revision 
 		}
 	}
 	previousKeys, err := resolveKeys(root, root, nil, k.identitySet, rules)
-	if err != nil || previousKeys.external || previousKeys.toIdentities != k.toIdentities {
+	if err != nil || previousKeys.external || previousKeys.toIdentities && !k.toIdentities {
 		// An implicit original encryptor or old external configuration cannot
 		// be reconstructed from Git. A local fingerprint can still prove reuse.
 		return false
@@ -523,10 +523,10 @@ func (k keys) rulesMatchRevision(root, path string, target fileTarget, revision 
 	if err != nil {
 		return false
 	}
-	if k.toIdentities {
+	if k.toIdentities && previousKeys.toIdentities {
 		return sameRecipients(target.listed, previous.listed)
 	}
-	return sameRecipients(target.values, previous.values)
+	return k.recipientFingerprint(target) == previousKeys.recipientFingerprint(previous)
 }
 
 // sameRecipients compares recipient lists as sets.

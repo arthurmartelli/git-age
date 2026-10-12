@@ -121,7 +121,7 @@ func TestExternalRecipientsIncludeNestedLists(t *testing.T) {
 }
 
 func TestEffectiveRecipientReuse(t *testing.T) {
-	for _, change := range []string{"comment", "patterns", "reorder and duplicates", "empty nested recipients", "move to nested", "addition", "removal"} {
+	for _, change := range []string{"comment", "patterns", "reorder and duplicates", "empty nested recipients", "move to nested", "move all to nested", "addition", "removal"} {
 		for _, stage := range []string{"working", "staged", "committed"} {
 			t.Run(change+"/"+stage, func(t *testing.T) {
 				isolateHookEnvironment(t)
@@ -159,6 +159,9 @@ func TestEffectiveRecipientReuse(t *testing.T) {
 				case "move to nested":
 					rules = "[files]\n*.env\n[recipients]\n" + own.Recipient().String() + "\n"
 					writeFile(t, directory, "sub/.gitage", "[recipients]\n"+other.Recipient().String()+"\n")
+				case "move all to nested":
+					rules = "[files]\n*.env\n"
+					writeFile(t, directory, "sub/.gitage", "[recipients]\n"+own.Recipient().String()+"\n"+other.Recipient().String()+"\n")
 				case "addition":
 					rules += added.Recipient().String() + "\n"
 				case "removal":
