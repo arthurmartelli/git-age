@@ -38,6 +38,9 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 	hook.AddCommand(&cobra.Command{
 		Use: "post-commit", Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := warnStagedPlaintext(cmd, options); err != nil {
+				return err
+			}
 			enabled, err := repository.UnlockAfterCommit(options.directory)
 			if err != nil {
 				return err
@@ -93,6 +96,35 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 		})
 	}
 	return hook
+}
+
+// warnStagedPlaintext reports protected plaintext left in the index. Git runs
+// pre-commit on a temporary index for `git commit -- PATH`, so the commit can
+// be encrypted while the real index still holds plaintext.
+func warnStagedPlaintext(cmd *cobra.Command, options *globalOptions) error {
+	check, err := repository.CheckIndex(options.directory, nil)
+	if !check.HasRules {
+		return nil
+	}
+	if err != nil {
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "git-age: warning: could not check the index: %v\n", err)
+		return err
+	}
+	var plaintext []string
+	for _, file := range check.Files {
+		if file.State == repository.Unlocked {
+			plaintext = append(plaintext, file.Path)
+		}
+	}
+	if len(plaintext) == 0 {
+		return nil
+	}
+	err = reportCheckFailure(cmd, "warning: commit succeeded, but protected files are still staged as plaintext", plaintext,
+		"Re-stage them so unchanged files reuse the committed ciphertext:\n\n  git add -- "+shellPaths(plaintext))
+	if errors.Is(err, errCheckFailed) {
+		return nil
+	}
+	return err
 }
 
 func prePush(cmd *cobra.Command, options *globalOptions, remote string) error {

@@ -529,6 +529,10 @@ or:
 Other hooks
 ~~~~~~~~~~~
 
+The post-commit hook warns when protected files are still staged as
+plaintext. This happens after `git commit -- PATH`, which encrypts the
+commit but leaves plaintext in the index; `git add` the files again.
+
 With `--unlock-after-commit`, the post-commit hook unlocks protected
 files again.
 

@@ -17,7 +17,7 @@ concurrency:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -70,7 +70,8 @@ jobs:
           binary="$RUNNER_TEMP/git-age"
           if [[ "$RUNNER_OS" == Windows ]]; then binary+=.exe; fi
           go build -trimpath -o "$binary" ./cmd/git-age
-          GIT_AGE="$binary" go test ./...
+          # Windows process startup makes the CLI tests take close to 10 minutes.
+          GIT_AGE="$binary" go test -timeout 20m ./...
 
   # Branch protection needs one stable check name across matrix changes.
   tests:

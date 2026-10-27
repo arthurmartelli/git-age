@@ -221,7 +221,12 @@ func TestHookGitCommit(t *testing.T) {
 			if scenario == "commit only" {
 				writeFile(t, directory, "other.env", "another staged file\n")
 				runGit(t, directory, "add", "other.env")
-				runGit(t, directory, "commit", "-qm", "only secret", "--only", "secret.env")
+				// Git runs pre-commit on a temporary index for --only, so the
+				// real index keeps the plaintext and post-commit must say so.
+				output := runGit(t, directory, "commit", "-qm", "only secret", "--only", "secret.env")
+				if !bytes.Contains(output, []byte("still staged as plaintext")) || !bytes.Contains(output, []byte("git add -- other.env secret.env")) {
+					t.Fatalf("post-commit did not report staged plaintext: %s", output)
+				}
 				if output := runGit(t, directory, "show", ":other.env"); string(output) != "another staged file\n" {
 					t.Fatal("partial commit changed another staged file")
 				}
