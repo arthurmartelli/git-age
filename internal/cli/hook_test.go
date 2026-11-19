@@ -267,6 +267,74 @@ func TestHookGitCommit(t *testing.T) {
 	}
 }
 
+// A file committed as plaintext and then added to .gitage has no staged change,
+// but its first protected commit must still be encrypted.
+func TestHookNewlyProtectedFile(t *testing.T) {
+	buildGitAge(t)
+	for _, scenario := range []string{"always-lock", "abort", "no-verify"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Setenv("GIT_AGE_KEY_FILE", "")
+			t.Setenv("GIT_AGE_RECIPIENT", "")
+			t.Setenv("GIT_AGE_HOOK_MODE", "")
+			t.Setenv("GIT_AGE_UNLOCK_AFTER_COMMIT", "")
+			os.Unsetenv("GIT_AGE_UNLOCK_AFTER_COMMIT")
+			directory, identity, _ := cleanFixture(t, []byte("original\n"), false)
+			mode := scenario
+			if scenario == "no-verify" {
+				mode = "always-lock"
+			}
+			if _, err := runCommand(directory, "install", "--hook-mode", mode); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, directory, "config", "age.unlockAfterCommit", "true")
+			writeFile(t, directory, "later.txt", "token=hunter2\n")
+			runGit(t, directory, "add", "later.txt")
+			runGit(t, directory, "commit", "-qm", "unprotected")
+
+			writeFile(t, directory, ".gitage", "[files]\n*.env\n/later.txt\n[recipients]\n"+identity.Recipient().String()+"\n")
+			if _, err := runCommand(directory, "install", "--hook-mode", mode); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, directory, "add", ".gitage", "later.txt")
+			command := exec.Command("git", "-C", directory, "commit", "-qm", "protect later.txt")
+			if scenario == "no-verify" {
+				command.Args = append(command.Args, "--no-verify")
+			}
+			output, err := command.CombinedOutput()
+			switch scenario {
+			case "always-lock":
+				if err != nil {
+					t.Fatalf("commit: %v, %s", err, output)
+				}
+				assertDecrypts(t, runGit(t, directory, "show", "HEAD:later.txt"), identity, []byte("token=hunter2\n"))
+				if bytes.Contains(output, []byte("still staged as plaintext")) {
+					t.Fatalf("post-commit reported plaintext after encrypting: %s", output)
+				}
+				if working := readFile(t, directory, "later.txt"); string(working) != "token=hunter2\n" {
+					t.Fatalf("post-commit did not unlock: %q", working)
+				}
+				if status := runGit(t, directory, "status", "--porcelain", "--", "later.txt"); len(status) != 0 {
+					t.Fatalf("unchanged unlocked file shows modified: %s", status)
+				}
+			case "abort":
+				if err == nil || !bytes.Contains(output, []byte("commit aborted")) || !bytes.Contains(output, []byte("later.txt")) {
+					t.Fatalf("abort mode committed newly protected plaintext: %v, %s", err, output)
+				}
+			case "no-verify":
+				if err != nil {
+					t.Fatalf("commit: %v, %s", err, output)
+				}
+				// Re-staging cannot help when HEAD itself holds the plaintext.
+				if !bytes.Contains(output, []byte("committed as plaintext")) || !bytes.Contains(output, []byte("git commit --amend")) || bytes.Contains(output, []byte("git add -- later.txt")) {
+					t.Fatalf("post-commit gave the wrong advice: %s", output)
+				}
+				runGit(t, directory, "commit", "-q", "--amend", "--no-edit")
+				assertDecrypts(t, runGit(t, directory, "show", "HEAD:later.txt"), identity, []byte("token=hunter2\n"))
+			}
+		})
+	}
+}
+
 func TestPromptHookChoice(t *testing.T) {
 	for _, test := range []struct{ input, want, diagnostic string }{
 		{"a\n", "abort", ""}, {"\n", "abort", ""}, {"", "abort", ""},
