@@ -85,15 +85,8 @@ func EncryptStaged(check IndexCheck) (CommitEncryption, error) {
 	return result, nil
 }
 
-func stagedStaleFiles(root string, blobs map[string]string, rules map[string][]byte) ([]string, error) {
-	var candidates []string
-	for path := range blobs {
-		candidates = append(candidates, nativePath(root, path))
-	}
-	files, err := matchProtectedFiles(root, root, candidates, rules, ruleIgnoreCase(root, true))
-	if err != nil {
-		return nil, err
-	}
+// stagedStaleFiles checks files, the protected entries of the index.
+func stagedStaleFiles(root string, files []ProtectedFile, blobs map[string]string, rules map[string][]byte) ([]string, error) {
 	var stale []string
 	history := newRecipientHistory(root, true)
 	defer history.objects.close()

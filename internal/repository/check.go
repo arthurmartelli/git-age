@@ -153,16 +153,11 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		}
 		changed[path] = content
 	}
-	// Public checks inspect the index snapshot; commit hooks inspect changes.
+	// Check the whole index, not just staged changes: a file committed as
+	// plaintext before a rule protected it has no change to stage.
 	var candidates []string
-	if requireRules {
-		for path := range blobs {
-			candidates = append(candidates, nativePath(root, path))
-		}
-	} else {
-		for path := range changed {
-			candidates = append(candidates, nativePath(root, path))
-		}
+	for path := range blobs {
+		candidates = append(candidates, nativePath(root, path))
 	}
 	result.Files, err = matchProtectedFiles(root, root, candidates, rules, ruleIgnoreCase(root, true))
 	if err != nil {
@@ -187,6 +182,36 @@ func checkIndex(directory string, requireRules bool) (IndexCheck, error) {
 		}
 	}
 	slices.Sort(result.PrivateKeys)
-	result.StaleFiles, err = stagedStaleFiles(root, blobs, rules)
+	result.StaleFiles, err = stagedStaleFiles(root, result.Files, blobs, rules)
 	return result, err
+}
+
+// CommittedPlaintext returns the paths, relative to directory, whose HEAD
+// version is plaintext. Re-staging them cannot reuse committed ciphertext.
+func CommittedPlaintext(directory string, paths []string) ([]string, error) {
+	root, err := Root(directory, "post-commit")
+	if err != nil {
+		return nil, err
+	}
+	// The Git root has symlinks resolved, so the directory must too.
+	if directory, err = filepath.Abs(directory); err != nil {
+		return nil, err
+	}
+	if directory, err = filepath.EvalSymlinks(directory); err != nil {
+		return nil, err
+	}
+	objects := newGitObjects(root)
+	defer objects.close()
+	var committed []string
+	for _, path := range paths {
+		relative, err := filepath.Rel(root, nativePath(directory, path))
+		if err != nil {
+			return nil, err
+		}
+		// A path missing from HEAD has nothing committed to reuse or fix.
+		if content, err := objects.blob("HEAD", relative); err == nil && contentState(content) != Locked {
+			committed = append(committed, path)
+		}
+	}
+	return committed, nil
 }

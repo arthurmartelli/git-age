@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/arthurmartelli/git-age/internal/repository"
@@ -119,12 +120,29 @@ func warnStagedPlaintext(cmd *cobra.Command, options *globalOptions) error {
 	if len(plaintext) == 0 {
 		return nil
 	}
-	err = reportCheckFailure(cmd, "warning: commit succeeded, but protected files are still staged as plaintext", plaintext,
-		"Re-stage them so unchanged files reuse the committed ciphertext:\n\n  git add -- "+shellPaths(plaintext))
-	if errors.Is(err, errCheckFailed) {
-		return nil
+	committed, err := repository.CommittedPlaintext(options.directory, plaintext)
+	if err != nil {
+		_, err = fmt.Fprintf(cmd.ErrOrStderr(), "git-age: warning: could not check the commit: %v\n", err)
+		return err
 	}
-	return err
+	// After `git commit -- PATH`, HEAD has ciphertext that re-staging reuses.
+	// After --no-verify or an explicit plaintext commit, only amending helps.
+	restage := slices.DeleteFunc(slices.Clone(plaintext), func(path string) bool { return slices.Contains(committed, path) })
+	for _, group := range []struct {
+		message, advice string
+		paths           []string
+	}{
+		{"warning: protected files were committed as plaintext", "Amend the commit to encrypt them:\n\n  git commit --amend --no-edit", committed},
+		{"warning: commit succeeded, but protected files are still staged as plaintext", "Re-stage them so unchanged files reuse the committed ciphertext:\n\n  git add -- " + shellPaths(restage), restage},
+	} {
+		if len(group.paths) == 0 {
+			continue
+		}
+		if err := reportCheckFailure(cmd, group.message, group.paths, group.advice); !errors.Is(err, errCheckFailed) {
+			return err
+		}
+	}
+	return nil
 }
 
 func prePush(cmd *cobra.Command, options *globalOptions, remote string) error {
