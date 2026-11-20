@@ -42,31 +42,25 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 			if err := warnStagedPlaintext(cmd, options); err != nil {
 				return err
 			}
-			enabled, err := repository.UnlockAfterCommit(options.directory)
-			if err != nil {
+			// Git keeps the index in memory between replayed commits, so a file
+			// unlocked here looks modified to the next pick, which then refuses to
+			// overwrite it. post-rewrite unlocks once a rebase finishes.
+			replaying, err := repository.ReplayInProgress(options.directory)
+			if err != nil || replaying {
 				return err
 			}
-			if !enabled || options.dryRun {
+			return unlockAfterCommit(cmd, options, "commit")
+		},
+	})
+	hook.AddCommand(&cobra.Command{
+		Use: "post-rewrite [amend|rebase]", Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// post-commit already unlocked after an amend, and Git also amends
+			// in the middle of a rebase, where unlocking would stop the next pick.
+			if !slices.Equal(args, []string{"rebase"}) {
 				return nil
 			}
-			root, err := repository.Root(options.directory, "post-commit")
-			if err != nil {
-				return err
-			}
-			files, err := repository.ProtectedFiles(root, nil)
-			if errors.Is(err, repository.ErrNoRules) {
-				return nil
-			}
-			if err == nil {
-				var skips repository.UnlockSkips
-				if skips, err = repository.Unlock(root, files, nil, false); err == nil {
-					err = reportUnlockSkips(cmd, options, skips)
-				}
-			}
-			if err != nil {
-				return fmt.Errorf("commit succeeded, but automatic unlock failed: %w", err)
-			}
-			return nil
+			return unlockAfterCommit(cmd, options, "rebase")
 		},
 	})
 	hook.AddCommand(&cobra.Command{
@@ -89,14 +83,42 @@ func newHookCommand(options *globalOptions) *cobra.Command {
 			return err
 		},
 	})
-	// These hooks only refresh the attributes, in PersistentPreRunE.
-	for _, event := range []string{"post-checkout", "post-rewrite"} {
-		hook.AddCommand(&cobra.Command{
-			Use: event, Args: cobra.NoArgs,
-			RunE: func(cmd *cobra.Command, args []string) error { return nil },
-		})
-	}
+	// This hook only refreshes the attributes, in PersistentPreRunE.
+	hook.AddCommand(&cobra.Command{
+		Use: "post-checkout", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error { return nil },
+	})
 	return hook
+}
+
+// unlockAfterCommit unlocks protected files when age.unlockAfterCommit is on.
+// operation names what just succeeded, for the error message.
+func unlockAfterCommit(cmd *cobra.Command, options *globalOptions, operation string) error {
+	enabled, err := repository.UnlockAfterCommit(options.directory)
+	if err != nil {
+		return err
+	}
+	if !enabled || options.dryRun {
+		return nil
+	}
+	root, err := repository.Root(options.directory, "unlock after "+operation)
+	if err != nil {
+		return err
+	}
+	files, err := repository.ProtectedFiles(root, nil)
+	if errors.Is(err, repository.ErrNoRules) {
+		return nil
+	}
+	if err == nil {
+		var skips repository.UnlockSkips
+		if skips, err = repository.Unlock(root, files, nil, false); err == nil {
+			err = reportUnlockSkips(cmd, options, skips)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("%s succeeded, but automatic unlock failed: %w", operation, err)
+	}
+	return nil
 }
 
 // warnStagedPlaintext reports protected plaintext left in the index. Git runs

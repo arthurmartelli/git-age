@@ -340,3 +340,48 @@ func TestHookInteractiveWithoutTerminal(t *testing.T) {
 		t.Fatal("unavailable confirmation changed HEAD or index")
 	}
 }
+
+func TestHookUnlockAfterReplayedCommits(t *testing.T) {
+	buildGitAge(t)
+	for _, scenario := range []string{"rebase", "autosquash", "cherry-pick"} {
+		t.Run(scenario, func(t *testing.T) {
+			isolateHookEnvironment(t)
+			directory, identity, _ := cleanFixture(t, []byte("original\n"), false)
+			mustCommand(t, directory, "install", "--hook-mode=always-lock")
+			t.Setenv("GIT_AGE_UNLOCK_AFTER_COMMIT", "1")
+			base := gitRevision(t, directory, "HEAD")
+			for _, content := range []string{"two", "three"} {
+				writeFile(t, directory, "secret.env", content+"\n")
+				runGit(t, directory, "add", "secret.env")
+				runGit(t, directory, "commit", "-qm", content)
+			}
+			tip := gitRevision(t, directory, "HEAD")
+			// Each replayed commit changes secret.env, so a pick fails if the
+			// previous commit's unlock left Git's in-memory index stale.
+			switch scenario {
+			case "rebase":
+				runGit(t, directory, "rebase", "-q", "--force-rebase", base)
+			case "autosquash":
+				// The fixup amends "two" before "three" is picked.
+				writeFile(t, directory, "other.txt", "other\n")
+				runGit(t, directory, "add", "other.txt")
+				runGit(t, directory, "commit", "-qm", "fixup! two")
+				runGit(t, directory, "rebase", "-q", "--autosquash", base)
+			default:
+				runGit(t, directory, "checkout", "-q", "--detach", base)
+				runGit(t, directory, "cherry-pick", base+".."+tip)
+			}
+			working := readFile(t, directory, "secret.env")
+			if scenario != "cherry-pick" {
+				if string(working) != "three\n" {
+					t.Fatalf("rebase left secret.env locked: %q", working)
+				}
+			} else {
+				assertDecrypts(t, working, identity, []byte("three\n"))
+			}
+			if status := runGit(t, directory, "status", "--porcelain", "--untracked-files=no"); len(status) != 0 {
+				t.Fatalf("replay left changes: %s", status)
+			}
+		})
+	}
+}

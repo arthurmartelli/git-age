@@ -276,7 +276,7 @@ func TestInstallHookEntrypoints(t *testing.T) {
 		{"pre-commit", "hook\npre-commit\ninput\n", nil},
 		{"pre-push", "hook\npre-push\nremote name\nssh://example/repo\ninput\n", []string{"remote name", "ssh://example/repo"}},
 		{"post-checkout", "hook\npost-checkout\ninput\n", []string{"old", "new", "1"}},
-		{"post-rewrite", "hook\npost-rewrite\ninput\n", []string{"rebase"}},
+		{"post-rewrite", "hook\npost-rewrite\nrebase\ninput\n", []string{"rebase"}},
 	} {
 		args := append([]string{"-C", directory, "hook", "run", "--to-stdin=" + filepath.Join(directory, ".hook-input"), test.event, "--"}, test.args...)
 		command := exec.Command("git", args...)

@@ -220,6 +220,23 @@ func UnlockAfterCommit(directory string) (bool, error) {
 	return enabled, nil
 }
 
+// ReplayInProgress reports whether a rebase, or a cherry-pick or revert of
+// several commits, is replaying commits.
+func ReplayInProgress(directory string) (bool, error) {
+	for _, name := range []string{"rebase-merge", "sequencer"} {
+		path, err := gitPath(directory, name)
+		if err != nil {
+			return false, err
+		}
+		if _, err := os.Lstat(path); err == nil {
+			return true, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
 // ParseBool accepts the boolean spellings Git accepts in config files.
 func ParseBool(value string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
@@ -264,7 +281,7 @@ func managedHook(content []byte, event string) bool {
 
 func renderHook(event string) string {
 	command := "git age hook " + event
-	if event == "pre-push" {
+	if event == "pre-push" || event == "post-rewrite" {
 		command += ` "$@"`
 	}
 	return "#!/bin/sh\n# git-age managed " + event + " hook\nexec " + command + "\n"

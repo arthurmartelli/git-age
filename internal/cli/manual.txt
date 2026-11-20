@@ -537,7 +537,10 @@ When the commit itself holds the plaintext, for example after
 `git commit --no-verify`, it suggests `git commit --amend` instead.
 
 With `--unlock-after-commit`, the post-commit hook unlocks protected
-files again.
+files again. During a rebase, or a cherry-pick or revert of several
+commits, it leaves them locked so Git can keep replaying commits; the
+post-rewrite hook unlocks them when a rebase finishes. Run
+`git age unlock` after a cherry-pick or revert.
 
 post-checkout, post-merge and post-rewrite keep Git attributes in sync
 with `.gitage`.
